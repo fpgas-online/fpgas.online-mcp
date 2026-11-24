@@ -77,3 +77,36 @@ def test_no_operator_paths():
     pattern = re.compile(r"10\.21\.|tweed|:8765")
     for path in skill_files():
         assert not pattern.search(path.read_text()), path
+
+
+def markdown_files():
+    return [SKILL_MD, *sorted(REFERENCES.glob("*.md"))]
+
+
+SH_BLOCK = re.compile(r"```sh\n(.*?)```", re.S)
+ALIAS_USE = re.compile(r"(?<![\w.-])fo-[A-Za-z0-9<>$_-]*[A-Za-z0-9<>$_]")
+ALIAS_DEF = re.compile(r"^Host (fo-[A-Za-z0-9_-]+)$", re.M)
+# the per-host rule in ssh.md: fo-ps1-pi<N>, fo-welland-pi-sw<S>-p<P>, written out or as placeholders
+ALIAS_RULE = re.compile(r"fo-(ps1-pi(\d+|<N>|\$N)|welland-pi-sw(\d+|<S>)-p(\d+|<P>)|<site>-<host>)")
+
+
+def test_aliases_follow_ssh_md():
+    defined = set(ALIAS_DEF.findall((REFERENCES / "ssh.md").read_text()))
+    assert defined, "ssh.md defines no fo- alias"
+    for path in markdown_files():
+        for alias in ALIAS_USE.findall(path.read_text()):
+            assert ALIAS_RULE.fullmatch(alias), f"{path.name}: {alias} does not follow the alias rule"
+            if not re.search(r"[<$]", alias):
+                assert alias in defined, f"{path.name}: {alias} is used but not defined in ssh.md"
+
+
+def test_curl_examples_send_user_agent():
+    lines = []
+    for path in markdown_files():
+        text = path.read_text()
+        for block in SH_BLOCK.findall(text):
+            lines += [(path.name, line) for line in block.splitlines() if re.search(r"\bcurl\b", line)]
+        lines += [(path.name, span) for span in re.findall(r"`(curl [^`]*https?://[^`]*)`", text)]
+    assert lines
+    for name, line in lines:
+        assert "-A fpgas-online-skill" in line, f"{name}: {line}"
