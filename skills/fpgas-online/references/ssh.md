@@ -31,16 +31,17 @@ not in shell history, your repo or a chat:
 
 ```sh
 FO_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/fpgas-online
-(umask 077; mkdir -p "$FO_DIR"
+(umask 077; mkdir -p "$FO_DIR"; chmod 700 "$FO_DIR"
  curl -sS -A fpgas-online-skill https://ps1.fpgas.online/fpgas/pi3.html |
-   grep -o 'password=[^&"]*' | head -n1 | cut -d= -f2 | base64 -d > "$FO_DIR/ps1.pw"
+   grep -o 'password=[^&"]*' | head -n1 | cut -d= -f2- | base64 -d > "$FO_DIR/ps1.pw"
  curl -sS -A fpgas-online-skill https://welland.fpgas.online/fpgas/pi-sw1-p2.html |
-   grep -o 'password=[^&"]*' | head -n1 | cut -d= -f2 | base64 -d > "$FO_DIR/welland.pw")
+   grep -o 'password=[^&"]*' | head -n1 | cut -d= -f2- | base64 -d > "$FO_DIR/welland.pw")
 ls -l "$FO_DIR"
 ```
 
-Prints two files of mode `-rw-------`, `ps1.pw` and `welland.pw`, each 8 bytes. The password
-changes when the site's password is rotated; if ssh later says `Permission denied`, run this
+Prints two files of mode `-rw-------`, `ps1.pw` and `welland.pw`, each 8 bytes. A 0-byte
+file means the extraction failed (page not fetched or its layout changed): fix that before
+using ssh. The password changes when the site's password is rotated; if ssh later says `Permission denied`, run this
 again.
 
 ## Unattended login: an askpass script
@@ -61,14 +62,16 @@ chmod 700 "$FO_DIR/askpass.sh"
 export SSH_ASKPASS="$FO_DIR/askpass.sh" SSH_ASKPASS_REQUIRE=force
 ```
 
-The directory is mode 700 (`umask 077` above) so other users on your machine cannot read
+The directory is mode 700 (`chmod 700` above) so other users on your machine cannot read
 the password files. Set the two `export`s in every shell that runs ssh or scp.
 
 ## `~/.ssh/config`: one alias per host, one shared connection
 
 Add this to `~/.ssh/config`, **before** any `Host *` block (ssh uses the first value it
-finds for each option, so an earlier `Host *` would override these). One alias block per
-host, then the shared block:
+finds for each option, so an earlier `Host *` would override these). Add one
+`Host fo-<site>-<host>` block for each host you use (`fo-ps1-pi<N>` or
+`fo-welland-pi-sw<S>-p<P>`), with `HostName <site>.fpgas.online` and the `Port` from the
+port rule above, then the shared block once. The examples in this skill use these two:
 
 ```
 Host fo-ps1-pi3
