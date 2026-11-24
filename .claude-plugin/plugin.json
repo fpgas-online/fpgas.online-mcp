@@ -1,0 +1,6 @@
+{
+  "name": "fpgas-online",
+  "description": "Guidance and copy-and-run command examples for using the FPGA and Tiny Tapeout boards on fpgas.online.",
+  "version": "0.0.1",
+  "license": "Apache-2.0"
+}

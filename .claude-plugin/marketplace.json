@@ -1,0 +1,14 @@
+{
+  "name": "fpgas-online",
+  "description": "Claude Code plugins for using the boards on fpgas.online.",
+  "owner": {
+    "name": "fpgas-online"
+  },
+  "plugins": [
+    {
+      "name": "fpgas-online",
+      "source": "./",
+      "description": "Guidance and copy-and-run command examples for using the FPGA and Tiny Tapeout boards on fpgas.online."
+    }
+  ]
+}
