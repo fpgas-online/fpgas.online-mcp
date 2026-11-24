@@ -1,0 +1,16 @@
+[project]
+name = "fpgas-online-mcp"
+version = "0.0"
+description = "Claude Code plugin with a skill for using the boards on fpgas.online"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
