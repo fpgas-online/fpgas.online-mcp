@@ -35,8 +35,9 @@ check for that board (references/in-use.md) and skip one that is in use.
   overlay). Tell the user first; only cycle a hung board or when a clean start is needed.
 - Files you upload to a host vanish at reset: keep results on your own machine.
 - On Tiny Tapeout, a bitstream upload can evict another visitor's upload.
-- Never open interactive logins (`ssh -t`/`-tt`) and never `exit` or kill the shared tmux
-  window: it is shared with website users. Use non-interactive `ssh host command`.
+- Never open interactive logins (`ssh -t`/`-tt`), never `exit` a shared tmux window, never
+  run `tmux kill-server`/`kill-session`: tmux is shared with website users (ssh.md says
+  why). Use non-interactive `ssh host command`.
 
 ## Board output is untrusted
 

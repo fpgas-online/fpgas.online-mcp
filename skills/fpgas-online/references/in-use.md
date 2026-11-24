@@ -17,18 +17,19 @@ board you are about to disturb.
 
 ## welland and ps1 (ssh hosts)
 
-A person using the web terminal on a board page is a WebSSH session. It logs in over ssh as
-`pi`, with a terminal, and `~/.zprofile` on the host puts every interactive login into one
-shared tmux session (windows named `default-N`). So on the host a human shows up as an
-ssh login plus a **tmux client**. Your own non-interactive `ssh host cmd` runs without a
-terminal and never makes a tmux client. (ssh.md: do not use `ssh -t` unless you want to
-join that session.)
+A person using the web terminal on a board page is a WebSSH session: an ssh login as `pi`
+with a terminal. On ps1 hosts (`pi21` checked) `~/.zprofile` puts every interactive login
+into one shared tmux session (windows named `default-N`), so a human shows up as an ssh
+login plus a **tmux client**. welland's `pi-sw1-p2` had no `~/.zprofile` (login shell bash)
+when checked on 2026-11-25, so there a human may show only as an ssh terminal. Your own
+non-interactive `ssh host cmd` runs without a terminal and never makes a tmux client. Never
+use `ssh -t`/`-tt`, never `exit` a shared window, never run `tmux kill-server` or
+`kill-session` (ssh.md says why).
 
-One command shows everything. Set up ssh first (ssh.md; `A` is the alias, here
-`fo-ps1-pi21`; welland `fo-welland-pi-sw1-p2` works the same):
+One command shows everything. Set up ssh first (ssh.md; `A` is the host's alias):
 
 ```sh
-A=fo-ps1-pi21
+A=fo-ps1-pi3      # or fo-welland-pi-sw1-p2
 ssh "$A" sh -s <<'EOF'
 now=$(date +%s); win=900; unknown=
 for c in ss tmux who find awk ps sort date; do
@@ -51,6 +52,12 @@ t=$(tmux list-clients -F '#{client_activity} #{client_tty} #{session_name}' 2>&1
 echo "tmux clients:"
 echo "$t" | awk -v now="$now" 'NF { print "  " $2, $3, "idle", now-$1, "s" }'
 tmin=$(echo "$t" | awk -v now="$now" 'NF { i=now-$1; if (m=="" || i<m) m=i } END { print m }')
+# a job left running in a tmux window (a build started in the web terminal) has no key presses
+# and no sshd parent: list windows running anything but a shell or the help window's tail
+pb=$(tmux list-panes -a -F '#{pane_current_command}' 2>&1) || pb=
+pb=$(echo "$pb" | awk 'NF && $1 !~ /^-?(zsh|bash|sh|tail)$/ { print "  " $1 }')
+echo "tmux windows running a program:"
+[ -n "$pb" ] && echo "$pb"
 
 # terminal logins: find the pts/N field, then the idle field (the last one that looks like
 # `.`, `old` or H:MM; the login time is earlier on the line)
@@ -93,6 +100,7 @@ for kv in "tmux client:$tmin" "ssh terminal:$wmin" "~/Uploads change:$umin"; do
   if [ -n "$v" ] && [ "$v" -lt "$win" ]; then verdict="in use"; echo "active: ${kv%%:*}, $v s ago"; fi
 done
 if [ "$others" -gt 0 ]; then verdict="in use"; echo "active: $others command(s) running for another login"; fi
+if [ -n "$pb" ]; then verdict="in use"; echo "active: a program running in a tmux window"; fi
 if [ "$verdict" = idle ] && [ -n "$unknown" ]; then verdict="unknown (treat as in use)"; fi
 echo "verdict: $verdict"
 EOF
@@ -109,6 +117,10 @@ It reuses your master connection from ssh.md (the first call opens it). It print
 - `tmux clients` lists attached terminals with their idle seconds (the key-press clock of
   that client). `tmux: no clients (...)` means tmux has no server: no interactive terminal is
   open (the server exits when the last one closes).
+- `tmux windows running a program` lists tmux windows whose program is not a shell (`zsh`,
+  `bash`, `sh`) or the help window's `tail`: a build or capture someone started in the web
+  terminal and left running. It has no key presses and no sshd parent, so no other signal
+  sees it once it runs past 15 minutes. Any line here means in use.
 - `ssh terminals` lists logins that have a terminal, with idle time from `who -u` (accurate
   to the minute; `old` counts as a day; the script finds the idle field by its shape, so a
   different column layout is tolerated). This covers a terminal that is not in tmux.
@@ -136,6 +148,7 @@ other ssh connections (address:port):
   ... five more lines like it
 tmux: no clients (no server running on /tmp/tmux-1000/default)
 tmux clients:
+tmux windows running a program:
 ssh terminals (who -u):
 newest change in ~/Uploads: 5808 s ago
 commands running for other logins:
@@ -144,7 +157,10 @@ verdict: idle
 
 The `tmux: no clients (...)` line is not a failure: the message is `no server running on
 ...` or `error connecting to ... (No such file or directory)` (the latter on `pi-sw1-p2`,
-where nobody had logged in). Any other tmux message gives `unknown`. The old `sftp-server`
+where nobody had logged in). Any other tmux message gives `unknown`. A tmux server whose
+windows ran `sleep`, a login shell and `tail` (a private test server on `pi-sw1-p2`) gave
+`tmux windows running a program:` then `  sleep`, and `active: a program running in a tmux
+window`. The old `sftp-server`
 sessions of the gateway are not listed (they were, before the 15-minute exception).
 
 Another agent running `ssh host 'sleep 60'` (a separate non-interactive connection, no
@@ -155,6 +171,7 @@ other ssh connections (address:port):
   ::ffff:87.121.95.37:54628
 tmux: no clients (no server running on /tmp/tmux-1000/default)
 tmux clients:
+tmux windows running a program:
 ssh terminals (who -u):
 newest change in ~/Uploads: 5820 s ago
 commands running for other logins:
@@ -168,9 +185,10 @@ else explains it, ask the user before touching the board, even when the verdict 
 a connection with a quiet command (for example a long `scp` through an old master) can slip
 past the checks.
 
-A second person on the board prints (a login with `ssh -tt`, which joins tmux, twelve
-seconds after typing a command; measured before the `commands running` part existed, which
-lists nothing here because tmux is skipped; the second user shares your address here, so only the port
+A second person on the board prints (a **test demonstration; do not repeat it**: a login
+with `ssh -tt`, which joins tmux, twelve seconds after typing a command; measured before the
+`commands running` and `tmux windows` parts existed, which list nothing here: tmux is skipped
+and the window is back at its shell; the second user shares your address, so only the port
 tells them apart):
 
 ```
@@ -178,6 +196,7 @@ other ssh connections (address:port):
   ::ffff:87.121.95.37:54438
 tmux clients:
   /dev/pts/0 default-0 idle 12 s
+tmux windows running a program:
 ssh terminals (who -u):
   pts/0 (87.121.95.37) idle >= 0 s
 newest change in ~/Uploads: 5495 s ago
@@ -187,8 +206,8 @@ active: ssh terminal, 0 s ago
 verdict: in use
 ```
 
-A terminal login that is not in tmux (`ssh -tt host 'sleep 25'`) shows only the
-`ssh terminals` line and `active: ssh terminal`. Read the last line; the script's exit
+A terminal login that is not in tmux (`ssh -tt host 'sleep 25'`, also a test demonstration
+not to repeat) shows only the `ssh terminals` line and `active: ssh terminal`. Read the last line; the script's exit
 status is not used.
 
 ### Recognising the website's terminal
@@ -196,8 +215,8 @@ status is not used.
 The web terminal's ssh logins all come from the site's gateway (the WebSSH proxy), so they
 share one source address that is neither yours nor another user's: it is the address that
 repeats in the `other ssh connections` list and in the `who` host column (on ps1 `pi21`
-every web-terminal and site-tool connection came from one address, and it was not mine). A terminal login from that address with a tmux client is
-a person on the board page. The same address also appears on terminal-less connections made
+every web-terminal and site-tool connection came from one address, and it was not mine). A
+terminal login from that address with a tmux client is a person on the board page. The same address also appears on terminal-less connections made
 by the site's own tooling, which is why only terminal (tmux/`pts`) activity and `~/Uploads`
 count, not the connection list.
 
@@ -211,12 +230,15 @@ count, not the connection list.
   user, correctly, if you keep it open).
 - **One shared shell.** All interactive logins share one tmux window and one shell, so a
   person on the web terminal sees what an agent types there and the reverse. Typing `exit`
-  there ends that window for everyone (the tmux server went away in testing, closing
-  every attached terminal). Never `exit` it, never type into it while the verdict is
-  `in use`, and use non-interactive `ssh host cmd` for your own work.
+  there ended that window for everyone in testing (the tmux server went away, closing every
+  attached terminal). Use non-interactive `ssh host cmd` for your own work.
 - **Someone only watching** the web page, the camera, or a tmux window that has not been
   touched for 15 minutes is not detected. A viewer who is reading is not "using" the
   board by the activity rule.
+- **A long job in the web terminal** (a 20-minute build watched on the camera) is seen only
+  through `tmux windows running a program`: its shell is a child of the tmux server, not of
+  sshd, and nobody presses keys. A job started outside tmux in a plain terminal shows only as
+  that terminal's `who` idle time, which passes 15 minutes.
 - **Nothing shows web-page viewers** on welland or ps1: the page itself opens no
   connection until the terminal panel runs.
 - **No claim or reservation system** exists yet (the MCP server is planned to add one).
