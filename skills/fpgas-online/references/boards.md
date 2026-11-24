@@ -34,11 +34,15 @@ curl -sS -A fpgas-online-skill https://welland.fpgas.online/fleet/registry.json 
 Prints nothing if none is offered today. Drop `.offered and` to see every Arty A7, and swap
 the type for `Fomu`, `TT FPGA`, `TT chip`, `NeTV2`, `Acorn`, `PCIe card`.
 
-`condition`:
+`condition` (four values):
 
-- `operational`: seen recently and its last self-test passed.
-- `attention`: seen recently, but the self-test failed or something is wrong. Do not rely on it.
-- `missing`: not seen lately (powered off, unplugged, or moved). `last_seen` says when.
+- `operational`: the machine is offered (checked in, FPGA check passed).
+- `checking`: it is checking in but its FPGA check has not finished this boot. Not offered;
+  try again shortly.
+- `attention`: not offered and should be: its check failed or could not finish, or it has
+  just stopped checking in. Do not rely on it.
+- `missing`: has not checked in for a long time (powered off, unplugged, or moved).
+  `last_seen` says when.
 
 `offered` is `true` only for machines the site invites you to use. Use only `offered: true`
 (in practice also `operational`). A board that is not offered may be in someone else's hands.
