@@ -242,24 +242,29 @@ curl -sS -A fpgas-online-skill "https://tinytapeout.fpgas.online/board/$S/status
   jq -c '{reachable, clients, idle: .idle_display.state}'
 ```
 
-For a connected board it prints `{"reachable":true,"clients":0,"idle":"loaded"}`; for a slug
-with no board `{"reachable":false,"clients":null,"idle":null}` (the response is
+For a connected, idle board it prints `{"reachable":true,"clients":0,"idle":"loaded"}`; for a
+slug with no board `{"reachable":false,"clients":null,"idle":null}` (the response is
 `{"reachable": false, "error": "not connected"}`).
 
 - `clients` is the number of open serial connections to the board. A person on the board
-  page's terminal or live view counts, and so does any agent with a serial connection. `0`
-  means nobody is attached right now. Unlike the 15-minute rule above it is a live count,
-  but it **lags**: the site caches `status.json` for 5 s and the page itself polls every
-  10 s, so read it twice, at least 15 s apart, and treat `clients > 0` on either read as in
-  use.
-- `idle_display.state` says what the board is showing: `loaded` (the idle display, nobody
-  has used the board for a while), `waiting` (the daemon is waiting out its quiet time),
-  `in use` (someone is using it), `left: <a visitor's design>` (somebody's design is still
-  loaded and is not replaced: they may be done, or about to come back; treat as in use and
-  ask the user), `board not present`, `not an fpga board`, `failed: ...`. `idle_display` is
-  `null` on a board that is not an FPGA board.
-- Idle is `clients: 0` on both reads and a state of `loaded` or `waiting`. Anything else is
-  not idle.
+  page's terminal or live view counts, and so does any agent with a serial connection. It is
+  a live count but **lags**: the site caches `status.json` for 5 s and the page polls every
+  10 s. It briefly also counts the daemon's own REPL connection and an HTTP enable (a false
+  "in use", which is safe), and a visitor whose WebSocket arrives while the daemon has the
+  board is held, not counted, for up to 20 s (the state then says `in use`).
+- `idle_display.state` (from the daemon's code; the quiet time is 60 s): `loaded` means the
+  idle display is on the board and nothing has happened for at least 60 s. `waiting` means
+  the board **was used less than 60 s ago** (a WebSocket closed, an enable or upload ended):
+  someone may be about to come back, so it is not idle; wait about 75 s and read again.
+  `in use` means a serial client is connected or a load is running. `left: <design>` means a
+  design somebody loaded is still there and will not be replaced: they may be done or about
+  to come back; treat it as in use and ask the user. `left: the SDK is not running` is the
+  state the Pi's boot check leaves (no SDK started); treat it the same way. `board not
+  present` and `failed: ...` are not idle either. A chip board always says `not an fpga
+  board` (checked live), so it is never idle by this rule: ask the user before touching one.
+  `idle_display` is `null` only when the board is not reachable.
+- **Idle** is `reachable: true`, `clients: 0` and `idle_display.state` `loaded` on two reads
+  at least 15 s apart. Anything else is not idle.
 
 Nothing is changed by these GETs; poll at most every 10 s.
 

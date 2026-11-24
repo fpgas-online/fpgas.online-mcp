@@ -84,8 +84,7 @@ Prints `data-port="..."` and `data-switch="..."`; both are empty (`""`) when no 
 connected to that slug, in which case there is nothing to cycle. Then POST that port and
 switch to `https://tinytapeout.fpgas.online/snmp/toggle`, as above. The button is hidden
 and the page has no controls for a slug without a port. Only cycle a board that
-in-use.md's Tiny Tapeout rule calls idle (`clients: 0` on two reads 15 s apart and a quiet
-`idle_display.state`) and that is `reachable: true`.
+in-use.md's Tiny Tapeout rule calls idle.
 
 ## The hold: reading 429 and `Retry-After`
 
