@@ -107,12 +107,17 @@ survive port moves where the site gives them: USB serial, board type, FPGA part.
 
 ### Holders and claims
 
-- A holder is one Claude session: `<label>@<host>`, where the label is the session's name
-  if the environment exposes one, otherwise its working directory and front-end pid. The
-  broker tracks which front ends are connected, so a claim whose holder has disconnected is
-  shown as such.
+- A claim belongs to its `claim_id`, not to a process. The holder label
+  (`<label>@<host>`: the session's name if the environment exposes one, otherwise its
+  working directory and front-end pid) is only for display.
 - `claim(board, minutes, purpose)` returns a `claim_id`. Default 30 minutes, maximum 240,
   renewable by claiming again with the same id. Claims are advisory and local to the machine.
+- `connect`, `run` and `power_cycle` take an optional `claim_id`. The front end remembers
+  the ids it created and fills them in; after a restart (`/mcp` reconnect, `--resume`,
+  broker restart) the session passes the id it was given, which `list_boards` also shows.
+- A claim whose front end has disconnected stays held until it expires, shown as
+  "holder disconnected". There is no shorter grace period: a session that stops for lunch
+  keeps its board until its own expiry.
 - Claims are also written as one JSON file per board in
   `$XDG_STATE_HOME/fpgas-online/claims/` (holder, purpose, expiry), so the CLI and
   skill-only agents see them, and they survive a broker restart.
@@ -129,16 +134,22 @@ survive port moves where the site gives them: USB serial, board type, FPGA part.
 | `board_status(board, check_use=true)` | One board in detail: inventory facts, local claim, and (if `check_use`) a live in-use check with its signals. | read-only |
 | `claim_board(board, minutes=30, purpose, override_reason?)` | Take or renew a claim (above). | not read-only, not destructive |
 | `release_board(claim_id)` | Release. | not read-only |
-| `connect(board)` | Ensure an ssh master to the host (needs a claim held by the caller, or the board idle); returns the alias, the generated config path, and the exact `ssh -F … <alias> 'cmd'` / `scp -F …` lines to use from the shell. | not read-only, not destructive |
-| `run(board, command, timeout_s=60)` | Run one non-interactive command over the master. Requires the caller's claim. Returns exit status and output truncated to 8 KB (head and tail), wrapped as untrusted board output. | not read-only, destructive=false, open-world |
-| `power_cycle(board, confirm_ps1=false)` | Requires the caller's claim and a fresh in-use check (any signal other than the caller's own → refuse). Closes the master, records the boot id (or Tiny Tapeout `uptime_s`), toggles, honours `Retry-After`, waits until the boot id changes and ssh/status answers (cap 5 minutes), and reports timings. On ps1 refuses unless `confirm_ps1=true` and says why. | destructive, not idempotent |
+| `connect(board, claim_id?)` | Ensure an ssh master to the host (needs the caller's claim); returns the alias, the generated config path, and the exact `ssh -F … <alias> 'cmd'` / `scp -F …` lines to use from the shell. | not read-only, not destructive |
+| `run(board, command, claim_id?, timeout_s=60)` | Run one non-interactive command over the master. Requires the caller's claim. Returns exit status and output truncated to 8 KB (head and tail), wrapped as untrusted board output. | not read-only, destructive=false, open-world |
+| `power_cycle(board, claim_id?, confirm_ps1=false)` | Requires the caller's claim and a fresh in-use check (any signal other than the caller's own → refuse). Closes the master, records the boot id (or Tiny Tapeout `uptime_s`), toggles, honours `Retry-After`, waits until the boot id changes and ssh/status answers (cap 5 minutes), and reports timings. On ps1 refuses unless `confirm_ps1=true` and says why. | destructive, not idempotent |
 
 Errors are returned as tool results that say what to do next (for example "claimed by
 X until 15:40; ask the user or pick another board").
 
 ### ssh
 
-- The broker writes `~/.config/fpgas-online/ssh_config` with one `Host fo-<site>-<host>`
+- There is one master per board, shared by every local session and the broker. Commands
+  through it all belong to one login on the host, so the in-use script cannot see one local
+  session's work from another: the local claim is the only guard between local sessions.
+  That is why `connect` requires a claim.
+- Aliases are `fpgas-<site>-<host>` (not stage 1's `fo-…`), so a stage 1 `Host fo-*` block
+  in `~/.ssh/config` cannot collide with the broker's config and open a second master.
+- The broker writes `~/.config/fpgas-online/ssh_config` with one `Host fpgas-<site>-<host>`
   block per board it has connected to (HostName, Port, User `pi`, `ControlMaster auto`,
   `ControlPath <runtime dir>/cm-%C`, `ControlPersist 30m`, `StrictHostKeyChecking
   accept-new`, `UserKnownHostsFile ~/.config/fpgas-online/known_hosts`), and an askpass
@@ -164,13 +175,31 @@ one in `in-use.md` by a test) over the master, excluding the broker's own connec
 the Tiny Tapeout rule against `status.json`. Verdicts: `idle`, `in use`, `unknown`, plus
 the local claim. Callers treat `unknown` as `in use`.
 
+**The claim holder's own activity.** For the holder of a live claim, two signals are
+discounted because they are the holder's own doing: `~/Uploads` changes newer than the
+claim's start, and on Tiny Tapeout an `idle_display.state` of `waiting` or `left: …` that
+began after the claim's start (the broker records `status.json` at claim time to tell).
+Every other signal — another login, a tmux client, another login's running command, a
+non-zero `clients` count — still refuses. So "load a design, it hangs, power-cycle" works
+for the holder, while a human who arrives during the claim still stops it.
+
 ### Packaging
 
 - Python ≥3.12, `uv`. MCP front end on the official `mcp` SDK or FastMCP — the builder
   picks after checking current versions — pinned exactly. httpx for site calls.
 - The plugin's `.mcp.json` runs the front end from the plugin directory
   (`uv run --project ${CLAUDE_PLUGIN_ROOT} fpgas-online-mcp`), so installing the plugin
-  installs the server. The stage 1 skill stays; its SKILL.md gains one line pointing to the
+  installs the server.
+- For cloud sessions (or any repo), the README gives a repo-level `.mcp.json` entry that
+  runs a tagged release straight from GitHub:
+  `uvx --from git+https://github.com/fpgas-online/fpgas.online-mcp@vX.Y fpgas-online-mcp`.
+  No PyPI release in this stage.
+- Sessions on big-storage are not sandboxed (checked 2026-11-25), so their shells can use
+  the broker socket and the ssh ControlPath sockets. The README notes that a sandboxed
+  session must allow `$XDG_RUNTIME_DIR/fpgas-online/` for the CLI and shared ssh to work.
+- The Tiny Tapeout sessions' hand-made claims directory
+  (`~/github/TinyTapeout/tmp/board-claims/`) holds no claims today (only a lock file), so
+  the server does not read it; once the server ships, those sessions are told to use it. The stage 1 skill stays; its SKILL.md gains one line pointing to the
   tools when present, and to the claims directory for skill-only agents.
 - README: install, the CLI, how to stop the broker (`fpgas-online broker stop`), where state
   lives.
