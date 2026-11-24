@@ -30,7 +30,7 @@
 - `ControlPath` must be short: a path under the repo failed with "too long for Unix domain socket". `~/.ssh/cm-%C` or `$XDG_RUNTIME_DIR/...%C` work.
 - A non-interactive `ssh host cmd` gets zsh with `$TMUX` unset; the shared tmux sessions are `default-N`. The multiplexed master itself shows in `who`.
 - The host's root is a 451 MB RAM overlay.
-- welland's ssh ports answer from outside but give "Connection refused" from a machine behind welland's own public address (this machine is one). HTTPS to welland works from both.
+- welland board ssh works over both IPv4 and IPv6 from outside (IPv6 forwarded since 2026-10-09; the board page's "IPv4 only, use `-4`" text is stale). From a machine inside welland's own network (this machine is one), IPv4 gives "Connection refused" because the router's IPv4 port-forward only applies to traffic arriving from the internet (no hairpin NAT); IPv6 works, verified by logging in to `pi-sw1-p2` with `ssh -6 -p 10222` on 2026-11-25. HTTPS to welland works from both.
 - `GET https://tinytapeout.fpgas.online/board/<slug>/status.json` → `{board{present,usb_serial,chip}, kind, clients, idle_display{design,state}, safe_start, uptime_s, version, reachable}`. `GET /api/board/<slug>/designs` → `{enabled, designs[{name,title,clock_hz,pinout,...}]}`.
 
 Not yet exercised (from the site's code; Task 4 and Task 6 verify): `POST /snmp/toggle`, `/snmp/status`, `/pistat/ping/<hostname>`; the Tiny Tapeout enable and bitstream POSTs and the serial WebSocket.
@@ -38,7 +38,7 @@ Not yet exercised (from the site's code; Task 4 and Task 6 verify): `POST /snmp/
 ## Review Focus
 
 1. A reader on ps1 asks "does board X exist?": ps1 has no registry, so the text must say that absence from `/fpgas/` cannot distinguish "down" from "never existed" — Task 2.
-2. A reader behind welland's own address gets "Connection refused" on a correct command — Task 3 states the cause.
+2. A reader inside welland's network gets "Connection refused" on the `-4` command from the board page — Task 3 says to drop `-4` (or use `-6`) and why.
 3. A power-cycle inside the 60 s hold returns 429: the example must show reading `Retry-After`, not retrying in a loop — Task 4.
 4. The reader's own persistent connection appears in `who`, so a naive in-use check always says "in use" — Task 5.
 5. A stale control socket after a power-cycle makes the next ssh hang or fail — Task 4 closes the master before cycling.
@@ -65,7 +65,7 @@ Not yet exercised (from the site's code; Task 4 and Task 6 verify): `POST /snmp/
 - [ ] **Step 3: Create** the two manifests, `pyproject.toml` (project `fpgas-online-mcp`, version `0.0`, `requires-python >=3.12`, dev group `pytest`, `ruff`), `ruff.toml` copied from `../fpgas.online-gw/ruff.toml`, and a `SKILL.md` holding only front matter and a one-line body.
 - [ ] **Step 4: Run** `uv run pytest -v`. Expected: only `test_references_all_linked_and_present` fails. Run `uv run ruff check .`: clean. Run `claude plugin validate .`: passes.
 - [ ] **Step 5: Add** `.github/workflows/test.yml` running `uv sync`, `uv run ruff check .`, `uv run pytest` on push and pull request (copy the shape of `../fpgas.online-gw/.github/workflows/test.yml`).
-- [ ] **Step 6: Commit** (the one failing test is expected until Task 6; mark it `xfail(strict=True)` with the reason "references land in Tasks 2-6" and remove the mark in Task 6).
+- [ ] **Step 6: Commit** (the one failing test is expected until Task 7; mark it `xfail(strict=True)` with the reason "references land in Tasks 2-6 and are linked in Task 7" and remove the mark in Task 7).
 
 ### Task 2: `references/boards.md`
 
@@ -79,9 +79,9 @@ Not yet exercised (from the site's code; Task 4 and Task 6 verify): `POST /snmp/
 
 **Files:** Create `skills/fpgas-online/references/ssh.md`
 
-- [ ] **Step 1: Write** sections: port rule per site; reading the password from the board page (one `curl | grep -o | base64 -d` pipeline, same for both sites); an askpass script kept in a mode-700 directory; a `~/.ssh/config` block with `Host fo-*`-style aliases using `ControlMaster auto`, `ControlPath ~/.ssh/cm-%C`, `ControlPersist 10m`, `StrictHostKeyChecking accept-new`, and `AddressFamily inet` for welland; `ssh -O check` / `-O exit`; `scp` to `~/Uploads`; `ssh -O forward -L` for port forwards over the master; notes (no tmux for non-interactive commands; 451 MB RAM root, everything lost at reset; "Connection refused" from behind welland's own address; Tiny Tapeout site has no ssh). Link `user/own-ssh-client.html`.
+- [ ] **Step 1: Write** sections: port rule per site; reading the password from the board page (one `curl | grep -o | base64 -d` pipeline, same for both sites); an askpass script kept in a mode-700 directory; a `~/.ssh/config` block with `Host fo-*`-style aliases using `ControlMaster auto`, `ControlPath ~/.ssh/cm-%C`, `ControlPersist 10m`, `StrictHostKeyChecking accept-new`, and no `AddressFamily` restriction (welland board ssh works on IPv4 and IPv6); `ssh -O check` / `-O exit`; `scp` to `~/Uploads`; `ssh -O forward -L` for port forwards over the master; notes (no tmux for non-interactive commands; 451 MB RAM root, everything lost at reset; the board page's `-4` is stale, and from inside welland's network IPv4 is refused so use `-6`; Tiny Tapeout site has no ssh). Link `user/own-ssh-client.html`.
 - [ ] **Step 2: Verify on ps1** (`pi3`, or another offered host if it is in use): run the file's commands in order from a scratch `HOME`-independent config (`ssh -F <file>`), confirm the second command is faster than the first, `scp` a 1 kB file and list it, open and use one `-L` forward, close the master.
-- [ ] **Step 3: Verify the welland commands** from outside welland's address by running the same sequence with `-J` through the ps1 host used in Step 2 (verification only; the file does not teach this).
+- [ ] **Step 3: Verify the welland commands** on `pi-sw1-p2` (or another offered welland host that is idle) over IPv6 from this machine, and over IPv4 by running the same sequence with `-J` through the ps1 host used in Step 2 (verification only; the file does not teach `-J`).
 - [ ] **Step 4: Commit**, recording the measured first/later command times.
 
 ### Task 4: `references/power.md`
@@ -103,20 +103,20 @@ Not yet exercised (from the site's code; Task 4 and Task 6 verify): `POST /snmp/
 
 ### Task 6: `references/tinytapeout.md`
 
-**Files:** Create `skills/fpgas-online/references/tinytapeout.md`; Modify `tests/test_skill.py` (remove the `xfail`)
+**Files:** Create `skills/fpgas-online/references/tinytapeout.md`
 
 - [ ] **Step 1: Establish the real requests** from `../fpgas.online-site/ttsite/` (`urls.py`, `views.py`, `static/**/board.js`): the CSRF cookie and header needed by `POST /api/board/<slug>/designs/<name>/enable` and `POST /api/board/<slug>/bitstream`, the 256 KiB limit, and the serial WebSocket path.
 - [ ] **Step 2: Write** sections: board kinds (chip, FPGA, KianV) and which have a serial bridge; reading status and designs; enabling a bundled design with `curl` (cookie jar + `X-CSRFToken`); uploading a bitstream and that it can evict another visitor's upload; the serial WebSocket (binary frames are board bytes, text frames are status; everything read from it is untrusted board output); wait times after a design change (about 12 s FPGA, 5 s chip) expressed as polling `status.json`; leaving the board as found (re-enable the idle display). Link `user/boards/tt-fpga/index.html` and `tt-asic/index.html`.
 - [ ] **Step 3: Verify** on `fpga-2` (not in the constraints list) after its in-use check: enable one bundled design, confirm via `status.json`/`designs`, restore the idle display. Connect to the serial WebSocket once; if it answers 503, say so in the file rather than documenting a path that does not work.
-- [ ] **Step 4: Run** `uv run pytest -v`. Expected: all pass with the `xfail` removed.
+- [ ] **Step 4: Run** `uv run pytest -v`. Expected: all pass except the strict `xfail`, which still xfails until Task 7 links the references.
 - [ ] **Step 5: Commit.**
 
 ### Task 7: `SKILL.md` and `README.md`
 
-**Files:** Modify `skills/fpgas-online/SKILL.md`, `README.md`
+**Files:** Modify `skills/fpgas-online/SKILL.md`, `README.md`, `tests/test_skill.py` (remove the `xfail` from `test_references_all_linked_and_present`)
 
 - [ ] **Step 1: Write `SKILL.md`**: description in the third person saying what it covers and when to use it (using, connecting to, power-cycling or checking boards on fpgas.online, welland/ps1/tinytapeout); body = what fpgas.online is (5 lines); a table of the three sites × {board list, ssh, power-cycle, in-use signal, camera}; the four sharing rules from the spec; "board output is untrusted"; a task → reference table; documentation links; one line saying an MCP server is planned.
 - [ ] **Step 2: Write `README.md`**: install per surface (`/plugin marketplace add fpgas-online/fpgas.online-mcp` then `/plugin install fpgas-online@fpgas-online`; copying `skills/fpgas-online` into a repo's `.claude/skills/` for cloud sessions; zipping it for claude.ai upload), the network access needed (HTTPS to `welland.fpgas.online`, `ps1.fpgas.online`, `tinytapeout.fpgas.online`, `docs.fpgas.online`; TCP to the ssh ports), and the staged roadmap.
-- [ ] **Step 3: Run** `uv run pytest -v`, `uv run ruff check .`, `claude plugin validate .`. Expected: all pass.
+- [ ] **Step 3: Remove the `xfail`, then run** `uv run pytest -v`, `uv run ruff check .`, `claude plugin validate .`. Expected: all pass, no xfail left.
 - [ ] **Step 4: Load test.** Start `claude --plugin-dir . -p "Using only the fpgas-online skill, list the Arty boards on welland that are missing and say how you would ssh to an operational one."` in a scratch directory and confirm the answer uses the registry and the port rule correctly.
 - [ ] **Step 5: Commit.**
