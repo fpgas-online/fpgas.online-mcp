@@ -30,7 +30,7 @@
 - `ControlPath` must be short: a path under the repo failed with "too long for Unix domain socket". `~/.ssh/cm-%C` or `$XDG_RUNTIME_DIR/...%C` work.
 - A non-interactive `ssh host cmd` gets zsh with `$TMUX` unset; the shared tmux sessions are `default-N`. The multiplexed master itself shows in `who`.
 - The host's root is a 451 MB RAM overlay.
-- welland board ssh works over both IPv4 and IPv6 from outside (IPv6 forwarded since 2026-10-09; the board page's "IPv4 only, use `-4`" text is stale). From a machine inside welland's own network (this machine is one), IPv4 gives "Connection refused" because the router's IPv4 port-forward only applies to traffic arriving from the internet (no hairpin NAT); IPv6 works, verified by logging in to `pi-sw1-p2` with `ssh -6 -p 10222` on 2026-11-25. HTTPS to welland works from both.
+- welland board ssh works over both IPv4 and IPv6 from outside (IPv6 forwarded since 2026-10-09; the board page's "IPv4 only, use `-4`" text is stale). From inside welland's own network (this machine is one), IPv4 board ssh was refused until the router gained NAT loopback on 2026-11-25; both families now log in from here (verified on `pi-sw1-p2`). The board sees the router's address for such logins. IPv4 HTTPS to welland from inside welland still times out (an older, separate router issue); use IPv6 or run from outside.
 - `GET https://tinytapeout.fpgas.online/board/<slug>/status.json` → `{board{present,usb_serial,chip}, kind, clients, idle_display{design,state}, safe_start, uptime_s, version, reachable}`. `GET /api/board/<slug>/designs` → `{enabled, designs[{name,title,clock_hz,pinout,...}]}`.
 
 Not yet exercised (from the site's code; Task 4 and Task 6 verify): `POST /snmp/toggle`, `/snmp/status`, `/pistat/ping/<hostname>`; the Tiny Tapeout enable and bitstream POSTs and the serial WebSocket.
@@ -38,7 +38,7 @@ Not yet exercised (from the site's code; Task 4 and Task 6 verify): `POST /snmp/
 ## Review Focus
 
 1. A reader on ps1 asks "does board X exist?": ps1 has no registry, so the text must say that absence from `/fpgas/` cannot distinguish "down" from "never existed" — Task 2.
-2. A reader inside welland's network gets "Connection refused" on the `-4` command from the board page — Task 3 says to drop `-4` (or use `-6`) and why.
+2. A reader copies the board page's `-4` command: it works, but the page's "IPv4 only" claim is stale — Task 3 says either family works.
 3. A power-cycle inside the 60 s hold returns 429: the example must show reading `Retry-After`, not retrying in a loop — Task 4.
 4. The reader's own persistent connection appears in `who`, so a naive in-use check always says "in use" — Task 5.
 5. A stale control socket after a power-cycle makes the next ssh hang or fail — Task 4 closes the master before cycling.
@@ -79,9 +79,9 @@ Not yet exercised (from the site's code; Task 4 and Task 6 verify): `POST /snmp/
 
 **Files:** Create `skills/fpgas-online/references/ssh.md`
 
-- [ ] **Step 1: Write** sections: port rule per site; reading the password from the board page (one `curl | grep -o | base64 -d` pipeline, same for both sites); an askpass script kept in a mode-700 directory; a `~/.ssh/config` block with `Host fo-*`-style aliases using `ControlMaster auto`, `ControlPath ~/.ssh/cm-%C`, `ControlPersist 10m`, `StrictHostKeyChecking accept-new`, and no `AddressFamily` restriction (welland board ssh works on IPv4 and IPv6); `ssh -O check` / `-O exit`; `scp` to `~/Uploads`; `ssh -O forward -L` for port forwards over the master; notes (no tmux for non-interactive commands; 451 MB RAM root, everything lost at reset; the board page's `-4` is stale, and from inside welland's network IPv4 is refused so use `-6`; Tiny Tapeout site has no ssh). Link `user/own-ssh-client.html`.
+- [ ] **Step 1: Write** sections: port rule per site; reading the password from the board page (one `curl | grep -o | base64 -d` pipeline, same for both sites); an askpass script kept in a mode-700 directory; a `~/.ssh/config` block with `Host fo-*`-style aliases using `ControlMaster auto`, `ControlPath ~/.ssh/cm-%C`, `ControlPersist 10m`, `StrictHostKeyChecking accept-new`, and no `AddressFamily` restriction (welland board ssh works on IPv4 and IPv6); `ssh -O check` / `-O exit`; `scp` to `~/Uploads`; `ssh -O forward -L` for port forwards over the master; notes (no tmux for non-interactive commands; 451 MB RAM root, everything lost at reset; the board page's "IPv4 only, `-4`" is stale, either family works; Tiny Tapeout site has no ssh). Link `user/own-ssh-client.html`.
 - [ ] **Step 2: Verify on ps1** (`pi3`, or another offered host if it is in use): run the file's commands in order from a scratch `HOME`-independent config (`ssh -F <file>`), confirm the second command is faster than the first, `scp` a 1 kB file and list it, open and use one `-L` forward, close the master.
-- [ ] **Step 3: Verify the welland commands** on `pi-sw1-p2` (or another offered welland host that is idle) over IPv6 from this machine, and over IPv4 by running the same sequence with `-J` through the ps1 host used in Step 2 (verification only; the file does not teach `-J`).
+- [ ] **Step 3: Verify the welland commands** on `pi-sw1-p2` (or another offered welland host that is idle) from this machine over both IPv4 and IPv6.
 - [ ] **Step 4: Commit**, recording the measured first/later command times.
 
 ### Task 4: `references/power.md`

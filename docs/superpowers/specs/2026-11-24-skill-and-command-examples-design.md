@@ -55,8 +55,9 @@ once stages 1 and 2 work well. Each later stage gets its own design.
   A non-interactive `ssh host command` does not join the shared tmux
   session. The Tiny Tapeout site offers no ssh. Exercised on ps1 on
   2026-11-24: multiplexing cut a command from 2.6 s to about 0.6 s.
-- welland's ssh ports answer from outside but refuse connections from a
-  machine behind welland's own public address. HTTPS is not affected.
+- welland's board ssh works over IPv4 and IPv6 (the page's "IPv4 only" is
+  stale). From inside welland's own network IPv4 was refused until the
+  router gained NAT loopback on 2026-11-25.
 - "In use" is only published for Tiny Tapeout boards, as the `clients` count
   in `status.json`. On welland and ps1 it can only be read on the host over
   ssh (logged-in users, tmux clients, idle times).
