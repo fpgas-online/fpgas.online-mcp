@@ -4,8 +4,6 @@ import json
 import re
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parent.parent
 SKILL_DIR = ROOT / "skills" / "fpgas-online"
 SKILL_MD = SKILL_DIR / "SKILL.md"
@@ -58,7 +56,6 @@ def test_skill_body_is_short():
     assert len(body.splitlines()) <= 150
 
 
-@pytest.mark.xfail(strict=True, reason="references land in Tasks 2-6 and are linked in Task 7")
 def test_references_all_linked_and_present():
     _, body = split_skill()
     linked = set(REFERENCE_LINK.findall(body))

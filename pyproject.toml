@@ -1,6 +1,6 @@
 [project]
 name = "fpgas-online-mcp"
-version = "0.0"
+version = "0.0.1"
 description = "Claude Code plugin with a skill for using the boards on fpgas.online"
 license = "Apache-2.0"
 requires-python = ">=3.12"
