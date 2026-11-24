@@ -18,11 +18,17 @@ board you are about to disturb.
 ## welland and ps1 (ssh hosts)
 
 A person using the web terminal on a board page is a WebSSH session: an ssh login as `pi`
-with a terminal. On ps1 hosts (`pi21` checked) `~/.zprofile` puts every interactive login
-into one shared tmux session (windows named `default-N`), so a human shows up as an ssh
-login plus a **tmux client**. welland's `pi-sw1-p2` had no `~/.zprofile` (login shell bash)
-when checked on 2026-11-25, so there a human may show only as an ssh terminal. Your own
-non-interactive `ssh host cmd` runs without a terminal and never makes a tmux client. Never
+with a terminal. What that looks like differs per site (checked 2026-11-25):
+
+- ps1 (`pi21`): login shell zsh, and `~/.zprofile` puts every interactive login into one
+  shared tmux session (windows named `default-N`), so a human shows up as an ssh terminal
+  plus a **tmux client**, and their shell runs under the tmux server.
+- welland (`pi-sw1-p2`): login shell bash, no `~/.zprofile` and no tmux in the dotfiles, so a
+  human is a plain bash login, a direct child of `sshd: pi@pts/N`. `commands running for
+  other logins` lists that shell for as long as the terminal is open, so an open welland web
+  terminal always reads `in use`.
+
+Your own non-interactive `ssh host cmd` runs without a terminal and never makes a tmux client. Never
 use `ssh -t`/`-tt`, never `exit` a shared window, never run `tmux kill-server` or
 `kill-session` (ssh.md says why).
 
@@ -53,9 +59,14 @@ echo "tmux clients:"
 echo "$t" | awk -v now="$now" 'NF { print "  " $2, $3, "idle", now-$1, "s" }'
 tmin=$(echo "$t" | awk -v now="$now" 'NF { i=now-$1; if (m=="" || i<m) m=i } END { print m }')
 # a job left running in a tmux window (a build started in the web terminal) has no key presses
-# and no sshd parent: list windows running anything but a shell or the help window's tail
-pb=$(tmux list-panes -a -F '#{pane_current_command}' 2>&1) || pb=
-pb=$(echo "$pb" | awk 'NF && $1 !~ /^-?(zsh|bash|sh|tail)$/ { print "  " $1 }')
+# and no sshd parent: a window is busy when its process has a child (a command, a script, a
+# `job &`) or is itself not a shell or the help window's tail
+pp=$(tmux list-panes -a -F '#{pane_pid} #{pane_current_command}' 2>&1) || pp=
+pb=$( { echo "$pp" | awk 'NF { print "P", $0 }'; ps -A -o ppid=,args=; } | awk '
+  $1 == "P" { if ($2 ~ /^[0-9]+$/) cmd[$2]=$3; next }
+  ($1 in cmd) { a=$0; sub(/^ *[0-9]+ +/,"",a); kid[$1]=a }
+  END { for (p in cmd) if ((p in kid) || cmd[p] !~ /^-?(zsh|bash|sh|tail)$/)
+          print "  window pid " p " (" cmd[p] "): " ((p in kid) ? substr(kid[p],1,60) : cmd[p]) }')
 echo "tmux windows running a program:"
 [ -n "$pb" ] && echo "$pb"
 
@@ -117,10 +128,11 @@ It reuses your master connection from ssh.md (the first call opens it). It print
 - `tmux clients` lists attached terminals with their idle seconds (the key-press clock of
   that client). `tmux: no clients (...)` means tmux has no server: no interactive terminal is
   open (the server exits when the last one closes).
-- `tmux windows running a program` lists tmux windows whose program is not a shell (`zsh`,
-  `bash`, `sh`) or the help window's `tail`: a build or capture someone started in the web
-  terminal and left running. It has no key presses and no sshd parent, so no other signal
-  sees it once it runs past 15 minutes. Any line here means in use.
+- `tmux windows running a program` lists tmux windows whose process has a child process (a
+  command, a script, a backgrounded `job &`), or is itself not a shell (`zsh`, `bash`, `sh`)
+  or the help window's `tail`: a build or capture someone started in the web terminal and
+  left running. It has no key presses and no sshd parent, so no other signal sees it once it
+  runs past 15 minutes. Any line here means in use. A shell at its prompt has no child.
 - `ssh terminals` lists logins that have a terminal, with idle time from `who -u` (accurate
   to the minute; `old` counts as a day; the script finds the idle field by its shape, so a
   different column layout is tolerated). This covers a terminal that is not in tmux.
@@ -158,9 +170,9 @@ verdict: idle
 The `tmux: no clients (...)` line is not a failure: the message is `no server running on
 ...` or `error connecting to ... (No such file or directory)` (the latter on `pi-sw1-p2`,
 where nobody had logged in). Any other tmux message gives `unknown`. A tmux server whose
-windows ran `sleep`, a login shell and `tail` (a private test server on `pi-sw1-p2`) gave
-`tmux windows running a program:` then `  sleep`, and `active: a program running in a tmux
-window`. The old `sftp-server`
+windows ran a `bash` script sleeping in `sleep 120`, a `sleep 120 &` typed at a shell
+prompt, an idle shell and `tail` (a private test server on `pi-sw1-p2`) listed the first two
+only, with `active: a program running in a tmux window`. The old `sftp-server`
 sessions of the gateway are not listed (they were, before the 15-minute exception).
 
 Another agent running `ssh host 'sleep 60'` (a separate non-interactive connection, no
@@ -228,17 +240,21 @@ count, not the connection list.
   exactly that address and port. It does not cover a second ssh process of yours that is
   not the master (a separate `ssh -tt` of yours is a different port and counts as another
   user, correctly, if you keep it open).
-- **One shared shell.** All interactive logins share one tmux window and one shell, so a
-  person on the web terminal sees what an agent types there and the reverse. Typing `exit`
-  there ended that window for everyone in testing (the tmux server went away, closing every
-  attached terminal). Use non-interactive `ssh host cmd` for your own work.
+- **One shared shell on ps1.** There all interactive logins share one tmux window and one
+  shell, so a person on the web terminal sees what an agent types there and the reverse.
+  Typing `exit` there ended that window for everyone in testing (the tmux server went away,
+  closing every attached terminal). On welland `pi-sw1-p2` each login is its own bash. Use
+  non-interactive `ssh host cmd` for your own work.
 - **Someone only watching** the web page, the camera, or a tmux window that has not been
   touched for 15 minutes is not detected. A viewer who is reading is not "using" the
   board by the activity rule.
-- **A long job in the web terminal** (a 20-minute build watched on the camera) is seen only
-  through `tmux windows running a program`: its shell is a child of the tmux server, not of
-  sshd, and nobody presses keys. A job started outside tmux in a plain terminal shows only as
-  that terminal's `who` idle time, which passes 15 minutes.
+- **A long job in the web terminal** (a 20-minute build watched on the camera): on ps1 it is
+  seen only through `tmux windows running a program` (its shell runs under the tmux server,
+  not sshd, and nobody presses keys). A job that is a shell busy on its own, with no child
+  process, is missed there. On welland the login shell is a child of sshd, so `commands
+  running for other logins` lists it while the terminal is open, job or not.
+- **A forgotten program** left running in a tmux window (`minicom`, `htop`) keeps the host
+  `in use` until someone ends it. That errs on the safe side: ask the user.
 - **Nothing shows web-page viewers** on welland or ps1: the page itself opens no
   connection until the terminal panel runs.
 - **No claim or reservation system** exists yet (the MCP server is planned to add one).
@@ -278,6 +294,8 @@ slug with no board `{"reachable":false,"clients":null,"idle":null}` (the respons
   idle display is on the board and nothing has happened for at least 60 s. `waiting` means
   the board **was used less than 60 s ago** (a WebSocket closed, an enable or upload ended):
   someone may be about to come back, so it is not idle; wait about 75 s and read again.
+  Still `waiting` after two such re-reads means the board keeps being used: treat it as in
+  use and ask the user.
   `in use` means a serial client is connected or a load is running. `left: <design>` means a
   design somebody loaded is still there and will not be replaced: they may be done or about
   to come back; treat it as in use and ask the user. `left: the SDK is not running` is the
