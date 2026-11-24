@@ -53,8 +53,10 @@ once stages 1 and 2 work well. Each later stage gets its own design.
 - ssh uses the user `pi` and one shared, published password. welland's port
   is `<switch><2-digit port>22` and needs `-4`; ps1's is `(100+N)*100+22`.
   A non-interactive `ssh host command` does not join the shared tmux
-  session. The Tiny Tapeout site offers no ssh. (From the code and docs; not
-  yet exercised.)
+  session. The Tiny Tapeout site offers no ssh. Exercised on ps1 on
+  2026-11-24: multiplexing cut a command from 2.6 s to about 0.6 s.
+- welland's ssh ports answer from outside but refuse connections from a
+  machine behind welland's own public address. HTTPS is not affected.
 - "In use" is only published for Tiny Tapeout boards, as the `clients` count
   in `status.json`. On welland and ps1 it can only be read on the host over
   ssh (logged-in users, tmux clients, idle times).
