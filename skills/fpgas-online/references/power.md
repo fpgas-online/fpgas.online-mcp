@@ -130,8 +130,8 @@ welland: the registry's `network.boot_id` changes when the Pi has booted and che
 back=
 for i in $(seq 1 30); do
   id=$(curl -sS -A fpgas-online-skill https://welland.fpgas.online/fleet/registry.json |
-    jq -r --arg h "$H" '[.machines[] | select(.hostname == $h) | select(.network.current_boot == true) | .network.boot_id] | last')
-  if [ "$id" != "$B" ] && [ "$id" != null ] && ssh -o ConnectTimeout=5 "$A" 'uname -n'; then
+    jq -r --arg h "$H" '[.machines[] | select(.hostname == $h) | select(.network.current_boot == true) | .network.boot_id] | last') || id=
+  if [ -n "$id" ] && [ "$id" != null ] && [ "$id" != "$B" ] && ssh -o ConnectTimeout=5 "$A" 'uname -n'; then
     back=yes; echo "back after $(( $(date +%s) - T0 )) s, new boot $id"; break
   fi
   sleep 10
