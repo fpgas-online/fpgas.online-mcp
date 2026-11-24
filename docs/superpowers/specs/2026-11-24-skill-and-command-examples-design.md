@@ -1,6 +1,6 @@
 # Stage 1 design: skill and command examples
 
-Date: 2026-11-24. Status: draft, awaiting approval.
+Date: 2026-11-24. Status: approved 2026-11-25, implemented.
 
 ## Intent
 
@@ -49,9 +49,10 @@ once stages 1 and 2 work well. Each later stage gets its own design.
   `/board/<slug>/status.json`.
 - Power control is `POST /snmp/toggle` with a JSON body naming the port (and
   the switch on welland). A port can be cycled once per 60 s; inside that it
-  answers 429 with `Retry-After`. (From the site's code; not yet exercised.)
+  answers 429 with `Retry-After` (exercised on welland on 2026-11-24; ps1
+  showed no hold).
 - ssh uses the user `pi` and one shared, published password. welland's port
-  is `<switch><2-digit port>22` and needs `-4`; ps1's is `(100+N)*100+22`.
+  is `<switch><2-digit port>22` (IPv4 and IPv6); ps1's is `(100+N)*100+22`.
   A non-interactive `ssh host command` does not join the shared tmux
   session. The Tiny Tapeout site offers no ssh. Exercised on ps1 on
   2026-11-24: multiplexing cut a command from 2.6 s to about 0.6 s.

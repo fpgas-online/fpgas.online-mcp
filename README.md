@@ -24,11 +24,13 @@ Claude Code, local, as a plugin:
 
 Claude Code cloud sessions: copy the folder `skills/fpgas-online` into your
 repository's `.claude/skills/` (so it is `.claude/skills/fpgas-online/SKILL.md`),
-or enable the skill on claude.ai, which cloud sessions load.
+or enable the skill on claude.ai, which cloud sessions are said to load (not
+verified).
 
 claude.ai: zip the `skills/fpgas-online` folder and upload the zip under
 Customize > Skills. Code execution must be enabled; the skill's commands run
-there.
+there. The claude.ai code sandbox probably cannot open ssh connections to these
+hosts (not verified), so expect only the HTTPS parts to work there.
 
 ## Network access
 
@@ -39,7 +41,8 @@ the environment has a network allowlist that you configure; allow:
   `tinytapeout.fpgas.online` and `docs.fpgas.online`.
 - Outbound TCP for ssh to `welland.fpgas.online` on ports 10122-14022 and
   20122-24822 (pattern `<switch><2-digit port>22`, for example `10222`), and to
-  `ps1.fpgas.online` on ports `(100+N)*100+22` (for example `10322` for `pi3`).
+  `ps1.fpgas.online` on ports `(100+N)*100+22` (for example `10322` for `pi3`;
+  the hosts listed on 2026-11-25, `pi2` to `pi23`, use 10222-12322).
 - WSS (443) to `tinytapeout.fpgas.online` for the serial bridge.
 
 Whether a cloud session permits outbound ssh on those ports has not been tested
