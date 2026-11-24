@@ -13,12 +13,21 @@ All commands send `-A fpgas-online-skill`. ssh setup (askpass, `fo-*` aliases): 
 ## Before you cycle
 
 1. Run the in-use check for the board (in-use.md). Skip a board that is in use.
-2. Close your own ssh master, so it does not sit on a dead socket afterwards:
+2. Record the boot you are about to replace, while ssh still works, then close your own
+   ssh master (it would sit on a dead socket afterwards). A restarted host has a new boot
+   id; a host that was not restarted keeps its old one.
    ```sh
-   ssh -O exit fo-ps1-pi21   # your alias; prints "Exit request sent."
+   # pick ONE of the two. welland: the registry's boot_id for the host (no ssh needed)
+   H=pi-sw1-p2; A=fo-welland-pi-sw1-p2
+   B=$(curl -sS -A fpgas-online-skill https://welland.fpgas.online/fleet/registry.json |
+     jq -r --arg h "$H" '[.machines[] | select(.hostname == $h) | .network.boot_id] | last')
+   # ps1 (no registry): ask the host
+   A=fo-ps1-pi21; B=$(ssh "$A" 'cat /proc/sys/kernel/random/boot_id')
+   echo "$B"                      # a UUID; keep it
+   ssh -O exit "$A"               # prints "Exit request sent."
    ```
-   (If it prints `Control socket connect(...): No such file or directory` there was no
-   master; that is fine.)
+   (If `ssh -O exit` prints `Control socket connect(...): No such file or directory` there
+   was no master; that is fine.)
 3. Note the time: `T0=$(date +%s)`.
 
 ## The request
@@ -109,39 +118,45 @@ A `429` response has a `Retry-After: <seconds>` header; the body says why.
 Poll once every 10 s and give up after 5 minutes (30 tries). Do not cycle again if it does
 not return. `T0` is the epoch time you noted before the request.
 
-welland: the registry's `last_seen` must be newer than T0 (the Pi has checked in from its
-new boot), then ssh must answer:
+A restarted host is "back" only when its boot id differs from `$B` (recorded above) **and**
+ssh answers. ssh alone is not proof: it can still reach the old boot for a moment before
+power drops, and a registry `last_seen` can come from the old boot too. If the id never
+changes the host did not restart: the loops say so and exit 1.
+
+welland: the registry's `network.boot_id` changes when the Pi has booted and checked in;
+`current_boot` must be `true`. Then ssh must answer:
 
 ```sh
-H=pi-sw1-p2; A=fo-welland-pi-sw1-p2
+back=
 for i in $(seq 1 30); do
-  ls=$(curl -sS -A fpgas-online-skill https://welland.fpgas.online/fleet/registry.json |
-    jq -r --arg h "$H" '[.machines[] | select(.hostname == $h) | .last_seen] | max')
-  if [ "$(date -u -d "$ls" +%s)" -gt "$T0" ] && ssh -o ConnectTimeout=5 "$A" 'uname -n'; then
-    echo "back after $(( $(date +%s) - T0 )) s"; break
+  id=$(curl -sS -A fpgas-online-skill https://welland.fpgas.online/fleet/registry.json |
+    jq -r --arg h "$H" '[.machines[] | select(.hostname == $h) | select(.network.current_boot == true) | .network.boot_id] | last')
+  if [ "$id" != "$B" ] && [ "$id" != null ] && ssh -o ConnectTimeout=5 "$A" 'uname -n'; then
+    back=yes; echo "back after $(( $(date +%s) - T0 )) s, new boot $id"; break
   fi
   sleep 10
 done
+[ -n "$back" ] || { echo "NOT restarted/back after 5 min: boot id still $B" >&2; false; }
 ```
 
-ps1 (no registry): ssh answering is the test. A host that is still booting gives
-`Connection refused` or a timeout; keep polling:
+ps1 (no registry): ask the host for its boot id; a host that is still booting gives
+`Connection refused` or a timeout (the `if` treats that as "not yet"):
 
 ```sh
-A=fo-ps1-pi21
+back=
 for i in $(seq 1 30); do
-  if ssh -o ConnectTimeout=5 "$A" 'uname -n'; then
-    echo "back after $(( $(date +%s) - T0 )) s"; break
+  id=$(ssh -o ConnectTimeout=5 "$A" 'cat /proc/sys/kernel/random/boot_id') || id=
+  if [ -n "$id" ] && [ "$id" != "$B" ]; then
+    back=yes; echo "back after $(( $(date +%s) - T0 )) s, new boot $id"; break
   fi
   sleep 10
 done
+[ -n "$back" ] || { echo "NOT restarted/back after 5 min: boot id still ${id:-unreachable}" >&2; false; }
 ```
 
-Prove the host really restarted, not just that ssh answers: ssh may still reach the old
-boot for the second or two before power drops. Compare `ssh "$A" 'uptime -s'` before and
-after; the boot time must move. On the one ps1 cycle measured (`pi21`) it did **not** move:
-the answer said `["off","on"]` but the host's uptime stayed at 7 days, so the port may not
-feed that host. If the boot time did not move, report it and do not cycle again.
+Measured on ps1 `pi21`: the toggle answered `["off","on"]` but the boot id (and
+`uptime -s`) never changed, so the loop above reports "NOT restarted"; the port may not
+feed that host. Report it and do not cycle again.
 
 tinytapeout: `status.json` must show the board again:
 
@@ -163,8 +178,8 @@ of a board that is still down.
 
 | Site | Host | Request returned | Back |
 | --- | --- | --- | --- |
-| welland | `pi-sw1-p2` (Fomu) | 1.0 s | registry `last_seen` newer at about 62 s; ssh answered at 67 s |
-| ps1 | `pi21` | 1.6 s | ssh answered at 15.6 s, but no reboot happened (see above) |
+| welland | `pi-sw1-p2` (Fomu) | 1.0 s | registry `last_seen` newer at about 62 s, ssh answered at 67 s (boot-id loop, second run: back at 76 s) |
+| ps1 | `pi21` | 1.6 s | ssh answered at 15.6 s, but the boot id never changed: no reboot |
 | tinytapeout | not measured | | no idle reachable board existed |
 
 These are one measurement each at 10 s polling; plan for a welland board to take a minute
