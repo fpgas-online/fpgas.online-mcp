@@ -13,21 +13,36 @@ All commands send `-A fpgas-online-skill`. ssh setup (askpass, `fo-*` aliases): 
 ## Before you cycle
 
 1. Run the in-use check for the board (in-use.md). Skip a board that is in use.
-2. Record the boot you are about to replace, while ssh still works, then close your own
-   ssh master (it would sit on a dead socket afterwards). A restarted host has a new boot
-   id; a host that was not restarted keeps its old one.
+2. Record the boot you are about to replace, while it still runs. A restarted host has a new
+   boot id (Tiny Tapeout: a new, small `uptime_s`); one that was not restarted keeps the
+   old. Run the block for your site only, and stop if it prints `stop`.
+
+   welland (the registry's boot id; no ssh needed), then close your ssh master (it would
+   sit on a dead socket afterwards):
    ```sh
-   # pick ONE of the two. welland: the registry's boot_id for the host (no ssh needed)
    H=pi-sw1-p2; A=fo-welland-pi-sw1-p2
    B=$(curl -sS -A fpgas-online-skill https://welland.fpgas.online/fleet/registry.json |
-     jq -r --arg h "$H" '[.machines[] | select(.hostname == $h) | .network.boot_id] | last')
-   # ps1 (no registry): ask the host
-   A=fo-ps1-pi21; B=$(ssh "$A" 'cat /proc/sys/kernel/random/boot_id')
-   echo "$B"                      # a UUID; keep it
+     jq -r --arg h "$H" '[.machines[] | select(.hostname == $h) | select(.network.current_boot == true) | .network.boot_id] | last') || B=
+   case "$B" in ''|null) echo "no boot id; stop" >&2; false;; *) echo "$B";; esac
    ssh -O exit "$A"               # prints "Exit request sent."
    ```
-   (If `ssh -O exit` prints `Control socket connect(...): No such file or directory` there
-   was no master; that is fine.)
+   ps1 (no registry: ask the host; its alias is `fo-ps1-pi<N>`, ssh.md):
+   ```sh
+   N=                             # the host's number: pi<N>
+   A=fo-ps1-pi$N
+   B=$(ssh "$A" 'cat /proc/sys/kernel/random/boot_id') || B=
+   case "$B" in ''|null) echo "no boot id; stop" >&2; false;; *) echo "$B";; esac
+   ssh -O exit "$A"
+   ```
+   tinytapeout (the daemon's uptime; it restarts when the board's Pi reboots):
+   ```sh
+   S=                             # the board's slug
+   U=$(curl -sS -A fpgas-online-skill "https://tinytapeout.fpgas.online/board/$S/status.json" |
+     jq -r '.uptime_s') || U=
+   case "$U" in ''|null) echo "board not reachable; stop" >&2; false;; *) echo "up $U s";; esac
+   ```
+   `B` is a UUID. (If `ssh -O exit` prints `Control socket connect(...): No such file or
+   directory` there was no master; that is fine.)
 3. Note the time: `T0=$(date +%s)`.
 
 ## The request
@@ -40,10 +55,14 @@ content type gets 403 `expected Content-Type: application/json; nothing was sent
 The body names the switch port. Take it from the host name (boards.md): `port` is a
 **string** (ps1 answers an integer with HTTP 500; welland accepts either).
 
+**ps1: ask the user before any toggle.** On ps1 the link from host name to switch port is
+unverified: a toggle for `pi21` answered `["off","on"]` but `pi21` did not reboot, so it may
+have cut power to some other board, one nobody checked.
+
 | Site | Body | Where the numbers come from |
 | --- | --- | --- |
 | welland | `{"port":"2","switch":1}` | host `pi-sw<S>-p<P>`: `switch` = S (a number), `port` = P |
-| ps1 | `{"port":"21"}` | host `pi<N>`: `port` = N; no `switch` (ps1 has one switch) |
+| ps1 | `{"port":"<N>"}` | host `pi<N>`: `port` = N (unverified, see above); no `switch` (ps1 has one switch) |
 | tinytapeout | `{"port":"9","switch":2}` | the `data-port` and `data-switch` attributes of the board page (see below) |
 
 Read-only state check (never changes anything; works on all three sites):
@@ -63,8 +82,8 @@ curl -sS -A fpgas-online-skill -X POST -H 'Content-Type: application/json' \
 ```
 
 Returns after about 1-2 s with `{"2": ["off", "on"]}` (the switch's confirmed state after
-each step; the key is the port). Replace the host, and for ps1 use
-`-d '{"port":"21"}' https://ps1.fpgas.online/snmp/toggle`.
+each step; the key is the port). For ps1 (after asking the user) use
+`-d '{"port":"<N>"}' https://ps1.fpgas.online/snmp/toggle`.
 
 Other answers (JSON `{"error": ...}`): 403 not a board this site offers (nothing was
 sent); 400 bad body; 502 the switch did not confirm (`The port may be off: press Reset
@@ -157,21 +176,23 @@ Measured on ps1 `pi21`: the toggle answered `["off","on"]` but the boot id (and
 `uptime -s`) never changed, so the loop above reports "NOT restarted"; the port may not
 feed that host. Report it and do not cycle again.
 
-tinytapeout: `status.json` must show the board again:
+tinytapeout: the board is back when `status.json` shows it reachable and present **and**
+the daemon restarted after the toggle (`uptime_s` smaller than the seconds since `T0`). A
+board that never lost power is still present, and the site caches `status.json` for 5 s, so
+the loop waits 10 s before its first read:
 
 ```sh
-S=fpga-1
+back=
 for i in $(seq 1 30); do
-  if curl -sS -A fpgas-online-skill "https://tinytapeout.fpgas.online/board/$S/status.json" |
-    jq -e '.reachable == true and .board.present == true' > /dev/null; then
-    echo "back after $(( $(date +%s) - T0 )) s"; break
-  fi
   sleep 10
+  u=$(curl -sS -A fpgas-online-skill "https://tinytapeout.fpgas.online/board/$S/status.json" |
+    jq -r 'if .reachable == true and .board.present == true then .uptime_s else empty end') || u=
+  if [ -n "$u" ] && [ "$u" != null ] && [ "$u" -lt $(( $(date +%s) - T0 )) ]; then
+    back=yes; echo "back after $(( $(date +%s) - T0 )) s, daemon up $u s"; break
+  fi
 done
+[ -n "$back" ] || { echo "NOT restarted/back after 5 min: daemon uptime ${u:-unreachable}, was $U at T0" >&2; false; }
 ```
-
-`jq -e` exits non-zero for `false` and for the `{"reachable": false, "error": ...}` object
-of a board that is still down.
 
 ### Measured return times (2026-11-24)
 
@@ -188,9 +209,9 @@ or two. Give up at 5 minutes.
 
 Stop. Do not send another toggle (it is held for 60 s and a hung board does not need a
 cascade of cycles). Tell the user: which host, the time of the request, the response body,
-the last `last_seen` or `status.json`, and what ssh printed. Check
-`/snmp/status` once (read-only): `{"state": "on"}` means the port has power and the host
-itself is not booting; `off` means the port is off and needs a person (try one `toggle`
-after the hold, once).
+the last `last_seen` or `status.json`, and what ssh printed. Check `/snmp/status` once
+(read-only): `{"state": "on"}` means the port has power and the host itself is not booting:
+stop there. Only if it says `off` (the port was left off) may you send one more `toggle`,
+after the hold, once; if that does not help, it needs a person.
 
 Afterwards, close your master again (`ssh -O exit`) so the next ssh makes a fresh one.

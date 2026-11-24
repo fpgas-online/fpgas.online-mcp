@@ -19,7 +19,7 @@ using boards, not running the infrastructure. Everything below needs only `curl`
 | URL | https://welland.fpgas.online | https://ps1.fpgas.online | https://tinytapeout.fpgas.online |
 | Board list | `/fleet/registry.json`: every machine, with `condition` and `offered`, including `missing` and `attention` ones | only the page `/fpgas/` of offered hosts; no registry, so absence says nothing | home page links `/board/<slug>/`; `status.json` says if one is connected |
 | ssh | yes, user `pi`, port `<switch><2-digit port>22` (`pi-sw1-p2` is 10222), IPv4 and IPv6 | yes, user `pi`, port `(100+N)*100+22` (`pi3` is 10322) | none |
-| Power-cycle | `POST /snmp/toggle`, then a 60 s hold (429 inside it); the host reboots | same endpoint, but its Reset may not actually power-cycle the host and has no hold | `POST /snmp/toggle` through the site (port from the board page) |
+| Power-cycle | `POST /snmp/toggle`, then a 60 s hold (429 inside it); the host reboots | same endpoint, no hold; the host-to-port link is unverified (a toggle may hit another board): ask the user first | `POST /snmp/toggle` through the site (port from the board page) |
 | In use | read on the host over ssh (logins, tmux clients, idle times) | same, over ssh | `status.json`: `clients` and `idle_display` |
 | Other | `cameras` in the registry | board page | designs, bitstream upload and serial bridge (state-changing parts not yet exercised live) |
 
