@@ -30,34 +30,70 @@ One command shows everything. Set up ssh first (ssh.md; `A` is the alias, here
 ```sh
 A=fo-ps1-pi21
 ssh "$A" sh -s <<'EOF'
-now=$(date +%s); win=900
+now=$(date +%s); win=900; unknown=
+for c in ss tmux who find awk ps sort date; do
+  command -v "$c" > /dev/null || { echo "missing tool on host: $c"; unknown=1; }
+done
 set -- $SSH_CONNECTION; me_ip=$1; me_port=$2
 echo "you: $me_ip port $me_port"
 
 echo "other ssh connections (address:port):"
 ss -tnH state established '( sport = :22 )' | awk -v ip="$me_ip" -v port="$me_port" '
   { p=$4; sub(/^\[/,"",p); sub(/\]:/,":",p); want=ip ":" port
-    if (substr(p, length(p)-length(want)+1) != want) print "  " p }'
+    if (substr(p, length(p)-length(want)+1) != want) print "  " p }' || unknown=1
 
-t=$(tmux list-clients -F '#{client_activity} #{client_tty} #{session_name}' 2>&1) || { echo "tmux: no clients ($t)"; t=; }
+t=$(tmux list-clients -F '#{client_activity} #{client_tty} #{session_name}' 2>&1) || {
+  case "$t" in
+    *"no server running"*|*"error connecting"*) echo "tmux: no clients ($t)" ;;
+    *) echo "tmux: unexpected: $t"; unknown=1 ;;
+  esac
+  t=; }
 echo "tmux clients:"
 echo "$t" | awk -v now="$now" 'NF { print "  " $2, $3, "idle", now-$1, "s" }'
 tmin=$(echo "$t" | awk -v now="$now" 'NF { i=now-$1; if (m=="" || i<m) m=i } END { print m }')
 
-w=$(who -u | awk '$3 ~ /^pts\// { i=($6=="." ? 0 : ($6=="old" ? 999999 : 0)); if ($6 ~ /:/) { split($6,a,":"); i=a[1]*3600+a[2]*60 }; print i, $3, $NF }')
+# terminal logins: find the pts/N field, then the idle field (the last one that looks like
+# `.`, `old` or H:MM; the login time is earlier on the line)
+w=$(who -u | awk '{ for (k=1; k<=NF; k++) if ($k ~ /^pts\//) break
+  if (k>NF) next
+  for (j=NF; j>k; j--) if ($j ~ /^(\.|old|[0-9]+:[0-9]+)$/) break
+  if (j<=k) { print "? " $k " " $NF; next }
+  i=0; if ($j=="old") i=999999; else if ($j ~ /:/) { split($j,a,":"); i=a[1]*3600+a[2]*60 }
+  print i, $k, $NF }')
 echo "ssh terminals (who -u):"
 echo "$w" | awk 'NF { print "  " $2, $3, "idle >=", $1, "s" }'
-wmin=$(echo "$w" | awk 'NF { if (m=="" || $1<m) m=$1 } END { print m }')
+echo "$w" | awk '$1 == "?" { f=1 } END { exit !f }' && unknown=1
+wmin=$(echo "$w" | awk '$1 != "?" && NF { if (m=="" || $1<m) m=$1 } END { print m }')
 
-u=$(find "$HOME/Uploads" -printf '%T@\n' | sort -n | tail -n 1)
-umin=; [ -n "$u" ] && umin=$((now - ${u%.*}))
+umin=
+if [ -d "$HOME/Uploads" ]; then
+  u=$(find "$HOME/Uploads" -printf '%T@\n' | sort -n | tail -n 1)
+  [ -n "$u" ] && umin=$((now - ${u%.*}))
+fi
 echo "newest change in ~/Uploads: ${umin:-none} s ago"
+
+# commands running for other ssh logins (an agent's `ssh host 'flash...'`): any process that
+# is a direct child of an sshd login other than yours, apart from tmux (counted above) and
+# sftp-server older than 15 min (an idle file-transfer session, not a running command)
+echo "commands running for other logins:"
+procs=$(ps -u "$(id -u)" -o pid=,ppid=,etimes=,args= | awk -v me="$$" -v win="$win" '
+  { pid=$1; ppid[pid]=$2; et[pid]=$3; a=$0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +/,"",a); args[pid]=a }
+  END { r=me; n=0
+        while (r != "" && r != 0 && args[r] !~ /^sshd(-session)?: [a-z]+@/ && n++ < 50) r=ppid[r]
+        if (args[r] !~ /^sshd(-session)?: [a-z]+@/) { print "?"; exit }
+        for (q in ppid) if (ppid[q] != r && args[ppid[q]] ~ /^sshd(-session)?: [a-z]+@/ && args[q] !~ /^tmux/ && !(args[q] ~ /sftp-server/ && et[q] >= win))
+          print "  pid " q ", running " et[q] " s: " substr(args[q],1,70) }')
+if [ "$procs" = "?" ]; then echo "  could not find your own login in the process list"; unknown=1; procs=; fi
+[ -n "$procs" ] && echo "$procs"
+others=$(echo "$procs" | awk 'NF { n++ } END { print n+0 }')
 
 verdict=idle
 for kv in "tmux client:$tmin" "ssh terminal:$wmin" "~/Uploads change:$umin"; do
   v=${kv#*:}
   if [ -n "$v" ] && [ "$v" -lt "$win" ]; then verdict="in use"; echo "active: ${kv%%:*}, $v s ago"; fi
 done
+if [ "$others" -gt 0 ]; then verdict="in use"; echo "active: $others command(s) running for another login"; fi
+if [ "$verdict" = idle ] && [ -n "$unknown" ]; then verdict="unknown (treat as in use)"; fi
 echo "verdict: $verdict"
 EOF
 ```
@@ -74,32 +110,67 @@ It reuses your master connection from ssh.md (the first call opens it). It print
   that client). `tmux: no clients (...)` means tmux has no server: no interactive terminal is
   open (the server exits when the last one closes).
 - `ssh terminals` lists logins that have a terminal, with idle time from `who -u` (accurate
-  to the minute; `old` counts as a day). This covers a terminal that is not in tmux.
+  to the minute; `old` counts as a day; the script finds the idle field by its shape, so a
+  different column layout is tolerated). This covers a terminal that is not in tmux.
 - `newest change in ~/Uploads` is the age of the newest file, directory or deletion there
   (someone copying files or building).
-- The verdict line: `in use` with one `active:` line per signal under 900 s, otherwise
-  `idle`.
+- `commands running for other logins` lists processes started by another ssh login than
+  yours (any command a second agent runs with `ssh host 'openFPGALoader ...'`, a serial
+  capture, a build), with how long each has run. These need no terminal and write nothing to
+  `~/Uploads`, so this is the only signal for them. tmux is skipped (counted above) and so
+  is an `sftp-server` older than 15 minutes (an idle file-transfer session, such as the
+  site's). Any command listed means in use, however long it has run.
+- The verdict line: `in use` with one `active:` line per signal (under 900 s, or any command
+  above), `unknown (treat as in use)` when the script could not check something (a tool is
+  missing on the host, tmux said something unexpected, a `who` line did not parse, or it
+  could not find your own login), otherwise `idle`. Treat `unknown` like `in use`: ask the
+  user.
 
 An idle host prints (measured on ps1 `pi21`; the six lines are old connections from the
 site gateway, listed but not use; `::ffff:` is how the host writes an IPv4 address):
 
 ```
-you: 87.121.95.37 port 56060
+you: 87.121.95.37 port 43804
 other ssh connections (address:port):
   ::ffff:<gateway address>:57646
   ... five more lines like it
+tmux: no clients (no server running on /tmp/tmux-1000/default)
 tmux clients:
 ssh terminals (who -u):
-newest change in ~/Uploads: 5376 s ago
+newest change in ~/Uploads: 5808 s ago
+commands running for other logins:
 verdict: idle
 ```
 
-When no tmux server runs (always true on `pi-sw1-p2`, which nobody had logged in to) the
-line after the connection list reads `tmux: no clients (error connecting to
-/tmp/tmux-1000/default (No such file or directory))`; that is idle, not a failure.
+The `tmux: no clients (...)` line is not a failure: the message is `no server running on
+...` or `error connecting to ... (No such file or directory)` (the latter on `pi-sw1-p2`,
+where nobody had logged in). Any other tmux message gives `unknown`. The old `sftp-server`
+sessions of the gateway are not listed (they were, before the 15-minute exception).
 
-A second person on the board prints (a login with `ssh -tt`, which joins tmux, three
-seconds after typing a command; the second user shares your address here, so only the port
+Another agent running `ssh host 'sleep 60'` (a separate non-interactive connection, no
+terminal; measured on `pi21`) prints:
+
+```
+other ssh connections (address:port):
+  ::ffff:87.121.95.37:54628
+tmux: no clients (no server running on /tmp/tmux-1000/default)
+tmux clients:
+ssh terminals (who -u):
+newest change in ~/Uploads: 5820 s ago
+commands running for other logins:
+  pid 11793, running 10 s: sleep 60
+active: 1 command(s) running for another login
+verdict: in use
+```
+
+If the connection list holds an address that is neither the gateway nor yours and nothing
+else explains it, ask the user before touching the board, even when the verdict is `idle`:
+a connection with a quiet command (for example a long `scp` through an old master) can slip
+past the checks.
+
+A second person on the board prints (a login with `ssh -tt`, which joins tmux, twelve
+seconds after typing a command; measured before the `commands running` part existed, which
+lists nothing here because tmux is skipped; the second user shares your address here, so only the port
 tells them apart):
 
 ```
@@ -110,6 +181,7 @@ tmux clients:
 ssh terminals (who -u):
   pts/0 (87.121.95.37) idle >= 0 s
 newest change in ~/Uploads: 5495 s ago
+commands running for other logins:
 active: tmux client, 12 s ago
 active: ssh terminal, 0 s ago
 verdict: in use
@@ -123,8 +195,8 @@ status is not used.
 
 The web terminal's ssh logins all come from the site's gateway (the WebSSH proxy), so they
 share one source address that is neither yours nor another user's: it is the address that
-repeats in the `other ssh connections` list and in the `who` host column, (on ps1 `pi21` every web-terminal and site-tool connection came from one address, and
-it was not mine). A terminal login from that address with a tmux client is
+repeats in the `other ssh connections` list and in the `who` host column (on ps1 `pi21`
+every web-terminal and site-tool connection came from one address, and it was not mine). A terminal login from that address with a tmux client is
 a person on the board page. The same address also appears on terminal-less connections made
 by the site's own tooling, which is why only terminal (tmux/`pts`) activity and `~/Uploads`
 count, not the connection list.
@@ -152,8 +224,13 @@ count, not the connection list.
   `tt-fpga.lock`, `verify.json`) belong to the host's own board check, are root-owned and
   empty, and were not held when looked at; they are not a way to claim a board. ps1 hosts
   have no `/run/fpgas-online/` at all. Do not rely on them.
-- A host that does not answer ssh, or has `tmux` missing, cannot be checked this way: say so
-  and ask the user rather than guessing.
+- **Quiet non-interactive work is only partly seen.** A second agent's command shows while it
+  runs (the `commands running` signal), but an old master of theirs that is only holding a
+  transfer or forward open, a command that has finished and left results to be collected, or
+  a file transfer through a connection older than 15 minutes are not. Ask the user when the
+  connection list holds something unexplained.
+- A host that does not answer ssh cannot be checked: say so and ask the user. A missing
+  tool or an unreadable `who` gives `verdict: unknown`, not `idle`.
 
 ## tinytapeout
 
