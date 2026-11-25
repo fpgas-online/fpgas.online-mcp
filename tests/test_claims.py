@@ -257,3 +257,15 @@ async def test_expiry_does_not_delete_fresh_claim(store, clock, tmp_path):
     f.write_text(json.dumps(fresh))
     store._drop_expired(f, c.claim_id)
     assert f.exists()
+
+
+async def test_expired_read_does_not_block_while_other_store_holds_lock(tmp_path, clock):
+    a, b = ClaimStore(tmp_path, clock), ClaimStore(tmp_path, clock)
+    c = await a.claim(BOARD, 30, "x", "a@h")
+    clock.advance(minutes=31)
+    f = tmp_path / "claims" / "welland_sw1-p1.json"
+    async with a._locked():
+        assert b.all() == []  # returns promptly (would deadlock with a blocking flock)
+        assert f.exists()  # drop skipped while the lock is busy
+    assert b.get(c.claim_id) is None
+    assert not f.exists()

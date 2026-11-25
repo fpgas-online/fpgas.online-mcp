@@ -176,10 +176,12 @@ class ClaimStore:
         try:
             if not self._holding:
                 fd = os.open(self._dir / ".lock", os.O_CREAT | os.O_RDWR, 0o600)
-                fcntl.flock(fd, fcntl.LOCK_EX)  # critical section is tiny
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # never block; skip if busy
             d = json.loads(path.read_text())
             if d.get("claim_id") == claim_id and _parse(d["expires"]) <= self._clock():
                 path.unlink()
+        except BlockingIOError:
+            pass  # another holder has the lock; the expired claim is still ignored
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             pass  # ignored on every read anyway
         finally:
