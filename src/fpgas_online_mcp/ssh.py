@@ -58,9 +58,14 @@ class RunResult:
     timed_out: bool
 
 
+def defuse(text: str) -> str:
+    """Neutralise any '</board-output' in board text."""
+    return _CLOSER.sub("&lt;/board-output", text)
+
+
 def wrap_untrusted(text: str) -> str:
     """Wrap board text so it cannot close the wrapper (any '</board-output' is defused)."""
-    text = _CLOSER.sub("&lt;/board-output", text)
+    text = defuse(text)
     return f'<board-output untrusted="true">{text}</board-output>'
 
 
