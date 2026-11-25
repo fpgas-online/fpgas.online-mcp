@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from fpgas_online_mcp import inuse
-from fpgas_online_mcp.cache import Entry
 from fpgas_online_mcp.boards import Board, BoardId
+from fpgas_online_mcp.cache import Entry
 from fpgas_online_mcp.claims import Claim
 from fpgas_online_mcp.ssh import RunResult
 
