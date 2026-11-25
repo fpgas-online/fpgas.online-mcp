@@ -64,5 +64,4 @@ Typical order: boards.md, in-use.md, then ssh.md or tinytapeout.md, power.md onl
 - Own ssh client: https://docs.fpgas.online/en/latest/user/own-ssh-client.html
 - Reset: https://docs.fpgas.online/en/latest/user/boards/reset.html
 
-An MCP server for these tasks (shared connections, claims, caching) is planned; until then
-use the commands in the references.
+When the `fpgas-online` MCP tools are present, prefer them (claims, shared connections, power-cycling). Agents without them can see who holds a board with `fpgas-online claims` or in the claims directory (`$XDG_STATE_HOME/fpgas-online/claims/`).
