@@ -24,6 +24,10 @@ path = "src/fpgas_online_mcp/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/fpgas_online_mcp"]
 
+# The stage 1 skill text, read by the guide tool (fpgas_online_mcp/guide.py).
+[tool.hatch.build.targets.wheel.force-include]
+"skills/fpgas-online" = "fpgas_online_mcp/skill"
+
 [dependency-groups]
 dev = [
     "pytest>=8",

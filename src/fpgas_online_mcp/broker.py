@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .paths import runtime_dir
+from .paths import cache_dir, runtime_dir, state_dir
 from .protocol import MAX_LINE, BrokerError, decode, encode, error_response
 
 SOCK_NAME = "broker.sock"
@@ -190,11 +190,24 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     async def run() -> None:
-        broker = Broker()
+        from .cache import Cache
+        from .claims import ClaimStore
+        from .ops import State, register
+        from .sites import SiteClient, new_http_client
+        from .ssh import SshManager
+
+        http = new_http_client()
+        sites = SiteClient(http, Cache(cache_dir()))
+        claims = ClaimStore(state_dir())
+        broker = Broker(active_claims=claims.active_count)
+        register(broker, State(sites, claims, SshManager(sites)))
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, broker.stop)
-        await serve(runtime_dir() / SOCK_NAME, broker)
+        try:
+            await serve(runtime_dir() / SOCK_NAME, broker)
+        finally:
+            await http.aclose()
 
     asyncio.run(run())
 

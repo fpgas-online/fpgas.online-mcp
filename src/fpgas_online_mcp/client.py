@@ -29,6 +29,11 @@ class BrokerClient:
         self._lock = asyncio.Lock()
         self._broken = False
 
+    @property
+    def broken(self) -> bool:
+        """True once a call failed mid-way; the connection is closed and must not be reused."""
+        return self._broken
+
     async def call(self, op: str, **args: Any) -> Any:
         async with self._lock:
             if self._broken:
