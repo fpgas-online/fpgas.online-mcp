@@ -80,7 +80,8 @@ def test_no_stderr_discard():
 
 def test_no_operator_paths():
     pattern = re.compile(r"10\.21\.|10\.99\.|tweed|:8765")
-    for path in shipped_files():
+    fixtures = [p for p in (ROOT / "tests" / "fixtures").rglob("*") if p.is_file()]
+    for path in shipped_files() + fixtures:
         assert not pattern.search(path.read_text()), path
 
 

@@ -2,7 +2,8 @@
 
 Captured 2026-11-26 with plain GET requests (User-Agent `fpgas-online-mcp/0.1.0`). Board
 pages have the site password replaced by `REDACTED` (base64 `UkVEQUNURUQ=` in the `/wssh/`
-URL). Nothing was trimmed.
+URL). The internal `hostname=` address in the `/wssh/` URL of the two
+ssh board pages is replaced by `192.0.2.1` (TEST-NET). Nothing was trimmed.
 
 | File | Source |
 | --- | --- |

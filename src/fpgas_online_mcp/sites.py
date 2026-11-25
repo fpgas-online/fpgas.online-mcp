@@ -179,9 +179,11 @@ class SiteClient:
         if switch is not None:
             body["switch"] = switch
         try:
-            resp = await self._http.post(self._url(site, "/snmp/toggle"), json=body)
+            resp = await self._http.post(self._url(site, "/snmp/toggle"), json=body, follow_redirects=False)
         except httpx.HTTPError as exc:
             raise SiteError(f"{site}: cannot reach the site ({type(exc).__name__})") from exc
+        if 300 <= resp.status_code < 400:
+            raise SiteError(f"{site}: toggle was redirected (HTTP {resp.status_code}); not followed or retried")
         try:
             answer = resp.json()
             if not isinstance(answer, dict):

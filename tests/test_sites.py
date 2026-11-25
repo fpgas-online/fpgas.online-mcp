@@ -299,3 +299,68 @@ async def test_toggle_network_error(tmp_path):
     with pytest.raises(SiteError, match="ps1"):
         await c.toggle("ps1", "21", None)
     await http.aclose()
+
+
+async def test_failed_fetch_is_shared_without_cache(client, site):
+    site.fail = True
+    site.delay = 0.05
+    results = await asyncio.gather(*(client.welland_registry() for _ in range(10)), return_exceptions=True)
+    assert site.count("/fleet/registry.json") == 1
+    assert all(isinstance(r, SiteError) for r in results)
+
+
+async def test_failed_fetch_is_shared_with_old_entry(client, site, clock):
+    await client.welland_registry()
+    clock.advance(120)
+    site.fail = True
+    site.delay = 0.05
+    results = await asyncio.gather(*(client.welland_registry() for _ in range(10)))
+    assert site.count("/fleet/registry.json") == 2  # the first fetch plus one shared failure
+    assert all(entry.stale for _, entry in results)
+
+
+async def test_cache_write_failure_is_best_effort(tmp_path, clock, site, monkeypatch, caplog):
+    import os
+
+    cache = Cache(tmp_path / "c", clock)
+
+    def boom(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", boom)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(site)) as http:
+        c = SiteClient(http, cache)
+        machines, entry = await c.welland_registry()
+        again, _ = await c.welland_registry()
+    assert machines and again == machines and not entry.stale
+    assert site.count("/fleet/registry.json") == 1
+    assert "cache write failed" in caplog.text
+    assert list((tmp_path / "c").iterdir()) == []  # temp file removed
+
+
+async def test_unwritable_cache_dir_still_serves(tmp_path, clock, site):
+    cache = Cache(tmp_path / "c", clock)
+    (tmp_path / "c").chmod(0o500)
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(site)) as http:
+            machines, _ = await SiteClient(http, cache).welland_registry()
+    finally:
+        (tmp_path / "c").chmod(0o700)
+    assert machines
+
+
+def test_cache_tightens_existing_dir(tmp_path, clock):
+    d = tmp_path / "c"
+    d.mkdir(mode=0o755)
+    Cache(d, clock)
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700
+
+
+async def test_toggle_redirect_is_not_followed(tmp_path):
+    seen, handler = toggle_site(None, httpx.Response(307, headers={"Location": "https://welland.fpgas.online/x"}))
+    http, c = await make(tmp_path, handler)
+    http.follow_redirects = True
+    with pytest.raises(SiteError, match="welland.*redirected"):
+        await c.toggle("welland", "2", 1)
+    await http.aclose()
+    assert len(seen) == 1
