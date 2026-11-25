@@ -12,7 +12,7 @@ dependencies = [
 [project.scripts]
 fpgas-online-mcp = "fpgas_online_mcp.mcp_server:main"
 fpgas-online-broker = "fpgas_online_mcp.broker:main"
-fpgas-online = "fpgas_online_mcp.cli:main"
+fpgas-online = "fpgas_online_mcp.cli:run"
 
 [build-system]
 requires = ["hatchling"]

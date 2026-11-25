@@ -1,0 +1,124 @@
+"""The CLI through main(argv), against the in-process broker of test_mcp's `stack` fixture."""
+
+import asyncio
+import json
+import tempfile
+from pathlib import Path
+
+import pytest
+from test_mcp import REPO_TMP, UNTRUSTED, WELLAND, stack  # noqa: F401  (fixture)
+
+import fpgas_online_mcp
+from fpgas_online_mcp.cli import main
+from fpgas_online_mcp.inuse import Verdict
+
+
+async def cli(capsys, *argv):
+    """Run main() in a thread (it starts its own event loop); (exit code, stdout, stderr)."""
+    code = await asyncio.to_thread(main, list(argv))
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+async def test_boards(stack, capsys):
+    code, out, err = await cli(capsys, "boards", "--site", "welland")
+    assert code == 0 and err == ""
+    assert out.splitlines()[0].split() == ["BOARD", "TYPE", "CONDITION", "OFFERED", "SEEN", "CLAIM"]
+    assert WELLAND in out and "welland:" in out and "as of 20" in out
+
+
+async def test_boards_json(stack, capsys):
+    code, out, _ = await cli(capsys, "boards", "--site", "welland", "--json")
+    data = json.loads(out)
+    assert code == 0 and set(data["sites"]) == {"welland"} and data["boards"]
+
+
+async def test_status(stack, capsys):
+    stack.inuse.verdict = Verdict("unknown", ["board says: missing tool"], "2026-11-26T12:00:00Z")
+    code, out, _ = await cli(capsys, "status", WELLAND)
+    assert code == 0
+    assert f"{WELLAND}:" in out and "in use: unknown (as of 2026-11-26T12:00:00Z)" in out
+    assert f"signals: {UNTRUSTED}board says: missing tool</board-output>" in out
+    code, out, _ = await cli(capsys, "status", WELLAND, "--json")
+    assert json.loads(out)["in_use"]["verdict"] == "unknown"
+
+
+async def test_claim_claims_release(stack, capsys):
+    code, out, _ = await cli(capsys, "claim", WELLAND, "--minutes", "10", "--purpose", "cli test")
+    assert code == 0
+    first = out.splitlines()[0]
+    assert first.startswith("CLAIM ID: ")
+    claim_id = first.split(": ")[1]
+    assert "cli test" in out and f"fpgas-online release {claim_id}" in out
+
+    code, out, _ = await cli(capsys, "claims")
+    assert code == 0 and claim_id in out and WELLAND in out and "cli:" in out and "cli test" in out
+    code, out, _ = await cli(capsys, "claims", "--json")
+    assert json.loads(out)["claims"][0]["claim_id"] == claim_id
+    code, out, _ = await cli(capsys, "boards", "--site", "welland")
+    assert "cli test" in out  # the claim shows in the board list
+
+    code, out, _ = await cli(capsys, "release", claim_id)
+    assert code == 0 and out.strip() == f"released {claim_id}"
+    code, out, _ = await cli(capsys, "claims")
+    assert code == 0 and out.strip() == "no live claims"
+
+
+async def test_claim_in_use_error_and_override(stack, capsys):
+    stack.inuse.verdict = Verdict("in use", ["board says: tmux client"], "2026-11-26T12:00:00Z")
+    code, out, err = await cli(capsys, "claim", WELLAND, "--purpose", "x")
+    assert code == 1 and out == "" and err.startswith("error: ") and "override_reason" in err
+    code, out, _ = await cli(capsys, "claim", WELLAND, "--purpose", "x", "--override-reason", "user said so")
+    assert code == 0 and "override: user said so" in out
+
+
+async def test_errors_go_to_stderr(stack, capsys):
+    code, out, err = await cli(capsys, "status", "welland:no-such-host")
+    assert code == 1 and out == "" and "list_boards" in err
+    code, out, err = await cli(capsys, "release", "nope")
+    assert code == 1 and out == "" and "not a live claim" in err
+
+
+async def test_broker_status_and_stop_idle(stack, capsys):
+    code, out, _ = await cli(capsys, "broker", "status")
+    assert code == 0 and f"version {fpgas_online_mcp.__version__}" in out and "pid " in out and "started " in out
+    code, out, _ = await cli(capsys, "broker", "status", "--json")
+    assert json.loads(out)["version"] == fpgas_online_mcp.__version__
+    code, out, _ = await cli(capsys, "broker", "stop")
+    assert code == 0 and "stopping" in out
+
+
+async def test_broker_stop_busy(stack, capsys):
+    await cli(capsys, "claim", WELLAND, "--purpose", "held")
+    code, out, err = await cli(capsys, "broker", "stop")
+    assert code == 1 and "busy" in out and WELLAND in out and "held" in out
+    code, out, _ = await cli(capsys, "broker", "stop", "--json")
+    assert code == 1 and json.loads(out)["stopping"] is False
+
+
+@pytest.fixture
+def no_broker(monkeypatch):
+    REPO_TMP.mkdir(exist_ok=True)
+    d = Path(tempfile.mkdtemp(dir=REPO_TMP, prefix="n"))
+    for name, sub in (("XDG_RUNTIME_DIR", "r"), ("XDG_STATE_HOME", "s"), ("XDG_CACHE_HOME", "c")):
+        (d / sub).mkdir()
+        monkeypatch.setenv(name, str(d / sub))
+    yield
+    import shutil
+
+    shutil.rmtree(d, ignore_errors=True)
+
+
+async def test_broker_not_running(no_broker, capsys):
+    code, out, _ = await cli(capsys, "broker", "status")
+    assert code == 1 and out.strip() == "not running"
+    code, out, _ = await cli(capsys, "broker", "stop")
+    assert code == 0 and out.strip() == "not running"
+    code, out, _ = await cli(capsys, "broker", "stop", "--json")
+    assert code == 0 and json.loads(out) == {"running": False}
+
+
+def test_bad_usage_exits_2(capsys):
+    with pytest.raises(SystemExit) as e:
+        main(["claim", WELLAND])  # --purpose is required
+    assert e.value.code == 2
