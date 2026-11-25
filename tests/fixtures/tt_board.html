@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tiny Tapeout board ab2a48a7ee008dd9 (ttgf0p3) &middot; Tiny Tapeout at fpgas.online</title>
+  <link rel="icon" href="/static/ttsite/ttlogo_400.png">
+  <link href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700" rel="stylesheet" crossorigin="anonymous">
+  <link rel="stylesheet" href="/static/ttsite/ttsite.css">
+  
+<link href="https://vjs.zencdn.net/8.4.0/video-js.min.css" rel="stylesheet" integrity="sha384-O1693jhBwPB1XLjzKaEPKj9CE0BvhyJDxjHuSIdJbnnwUdvYJdSpeNirj4SI6ykY" crossorigin="anonymous">
+<script src="https://vjs.zencdn.net/8.4.0/video.min.js" integrity="sha384-8xYKfmtsU5lgse5NLwJgMVIc2jwyIq7ktrA0EmhKN23PmmrAyXWp6RKrVDm9I7Zd" crossorigin="anonymous"></script>
+
+
+
+</head>
+<body>
+<div id="fo-uc" role="status">
+  <span>&#9888; <strong>Under construction!</strong>
+    (Broken? Try <a href="https://ps1.fpgas.online/">ps1.fpgas.online</a>)</span>
+  <button type="button" id="fo-uc-dismiss" aria-label="Dismiss this notice">&#10005;</button>
+</div>
+<style>
+#fo-uc {
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25em 0.75em;
+  width: 100%;
+  margin: 0;
+  padding: 0.6em 1em;
+  background: #fff3cd;
+  color: #4a3b00;
+  border-bottom: 1px solid #e0c86a;
+  font: 400 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  text-align: center;
+}
+#fo-uc a { color: inherit; font-weight: 600; }
+#fo-uc-dismiss {
+  flex: none;
+  padding: 0.2em 0.4em;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+#fo-uc-dismiss:hover, #fo-uc-dismiss:focus { opacity: 1; }
+</style>
+<script>
+(function () {
+  var bar = document.getElementById('fo-uc');
+  if (!bar) return;
+  // Clients that send Sec-Fetch-Dest never get here in a frame; this covers
+  // the ones that do not send it (Safari before 16.4), which the middleware
+  // has to treat as a top-level navigation.
+  if (window.top !== window.self) { bar.parentNode.removeChild(bar); return; }
+  document.getElementById('fo-uc-dismiss').addEventListener('click', function () {
+    document.cookie = 'fo_uc_dismissed=1; max-age=604800; path=/; SameSite=Lax';
+    bar.parentNode.removeChild(bar);
+  });
+})();
+</script>
+
+<header class="tt-header">
+  <a class="tt-brand" href="/"><img src="/static/ttsite/ttlogo_400.png" alt="Tiny Tapeout logo"><span>Tiny Tapeout <em>at fpgas.online</em></span></a>
+  <nav class="tt-nav" aria-label="Main">
+    <a href="/" >Boards</a>
+    <a href="/#asic" data-section="asic">ASIC</a>
+    <a href="/#fpga" data-section="fpga">FPGA</a>
+    <a href="/#kianv" data-section="kianv">KianV</a>
+    <a href="/docs/" >Docs</a>
+    <a class="tt-nav__ext" href="https://tinytapeout.com/" target="_blank" rel="noopener">tinytapeout.com &#8599;</a>
+  </nav>
+</header>
+<main class="tt-main">
+<div id="ttsite-board"
+     data-slug="tt-ab2a48a7ee008dd9" data-kind="asic" data-shuttle="ttgf0p3"
+     data-usb-serial="ab2a48a7ee008dd9"
+     data-port="11" data-switch="2"
+     data-ws-path="" data-api-base="/api/board/tt-ab2a48a7ee008dd9"
+     data-status-url="/board/tt-ab2a48a7ee008dd9/status.json"
+     data-pistat-groups="pi-sw2-p11"
+     data-commander-js="">
+  <header class="tt-board-head">
+    <h1>Tiny Tapeout board ab2a48a7ee008dd9 (ttgf0p3) <span class="tt-kind tt-kind--asic">TT ASIC</span></h1>
+    <a href="https://tinytapeout.com/chips/ttgf0p3/" target="_blank" rel="noopener">ttgf0p3 chip page &#8599;</a>
+    <span id="tt-status" class="tt-pill tt-pill--unknown">status&hellip;</span>
+    
+    <button id="tt-power" class="tt-btn tt-btn--warn" title="Toggle PoE on the switch port this board's Pi is on now (switch 2 port 11)">Power-cycle board</button>
+    <button id="tt-video-reset" class="tt-btn">Reset video</button>
+  </header>
+  
+  <div class="tt-board-grid">
+    <section class="tt-camera"><div class="whep-live" data-whep-url="/cam/pi-sw2-p11/whep" data-hls-id="tt-video"></div>
+    <video id="tt-video" class="video-js vjs-fluid" controls autoplay muted playsinline preload="auto" data-setup='{"liveui": true, "sources": [{"src": "/live/pi-sw2-p11.m3u8", "type": "application/x-mpegURL"}]}'></video></section>
+    <section class="tt-commander">
+      <p class="tt-notice" id="tt-no-controls">This board is not offered: its Raspberry Pi&#x27;s boot check did not pass (its result: fail): sdk fail: no SDK release is recorded as supporting a ttgf0p3 chip: add its row to SDK_SUPPORTED; wiring not run: it needs sdk to pass first. This page offers no controls for the board until its Raspberry Pi's boot check has read it and passed; the camera and the power-cycle button are still here.</p>
+      
+    </section>
+  </div>
+  
+  
+  <section class="tt-info">
+    <h2>About this board</h2>
+    
+    <dl><dt>PCB</dt><dd>TTDBv3 [3.2]</dd>
+        
+        <dt>Board</dt><dd>USB serial ab2a48a7ee008dd9, TTDBv3 [3.2], SDK 3.1.1</dd>
+        <dt>Boot check</dt><dd>fail</dd>
+        <dt>Where now</dt><dd>Welland, on pi-sw2-p11</dd></dl>
+    <ul class="tt-links">
+      
+      <li><a href="https://tinytapeout.com/guides/get-started-demoboard/" target="_blank" rel="noopener">Demo board guide &#8599;</a></li>
+      <li><a href="https://github.com/TinyTapeout/tt-micropython-firmware" target="_blank" rel="noopener">MicroPython SDK docs &#8599;</a></li>
+      <li><a href="https://tinytapeout.com/specs/pinouts/" target="_blank" rel="noopener">Pinouts &#8599;</a></li>
+      <li><a href="/docs/">All docs &rarr;</a></li>
+    </ul>
+    
+    
+  </section>
+  <section class="tt-log"><h2>Status log</h2>
+    <textarea id="tt-log" rows="6" readonly></textarea></section>
+</div>
+</main>
+<footer class="tt-footer">
+  <p>A community-run Tiny Tapeout hardware instance hosted by fpgas.online at Welland, South Australia &mdash; not operated by Tiny Tapeout Ltd.
+     <a href="https://github.com/fpgas-online/fpgas.online-site">Source on GitHub</a> &middot;
+     <a href="https://fpgas.online/">fpgas.online</a></p>
+</footer>
+<script type="module" src="/static/ttsite/board.js"></script>
+<script src="/static/js/mediamtx-reader.js"></script>
+<script src="/static/js/whep-live.js"></script>
+<script>
+  // Scroll-spy: on pages that have the sections, light up the matching nav link.
+  (function () {
+    var links = document.querySelectorAll('.tt-nav a[data-section]');
+    var sections = [];
+    links.forEach(function (a) {
+      var s = document.getElementById(a.dataset.section);
+      if (s) sections.push([s, a]);
+    });
+    if (!sections.length || !('IntersectionObserver' in window)) return;
+    var byId = {};
+    sections.forEach(function (p) { byId[p[0].id] = p[1]; });
+    var current = null;
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        if (current) current.classList.remove('is-active');
+        current = byId[e.target.id];
+        current.classList.add('is-active');
+      });
+    }, { rootMargin: '-30% 0px -60% 0px' });
+    sections.forEach(function (p) { io.observe(p[0]); });
+  })();
+</script>
+</body>
+</html>
