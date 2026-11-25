@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 argv = sys.argv[1:]
 state = os.environ["FAKE_SSH_STATE"] + "." + next((a for a in argv if a.startswith("fpgas-")), "x")
@@ -44,6 +45,13 @@ if "-O" in argv:
         sys.exit(255)
 if "-MNf" in argv:
     open(state, "w").close()
+    if os.fork() == 0:
+        # Like a real daemonised master: new session, keeps the inherited stdout/stderr open.
+        os.setsid()
+        with open(state + ".child", "w") as f:
+            f.write(str(os.getpid()))
+        time.sleep(int(os.environ.get("FAKE_SSH_CHILD_S", "4")))
+        os._exit(0)
     sys.exit(0)
 if "--" in argv:
     command = argv[argv.index("--") + 1]

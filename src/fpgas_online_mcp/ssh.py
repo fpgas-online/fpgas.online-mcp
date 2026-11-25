@@ -22,6 +22,7 @@ from .boards import BoardId
 SITE_HOSTS = {"welland": "welland.fpgas.online", "ps1": "ps1.fpgas.online"}
 START_TIMEOUT_S = 30.0
 OP_TIMEOUT_S = 15.0
+GRACE_S = 5.0
 HEAD = TAIL = 4096
 MAX_OUTPUT = HEAD + TAIL
 
@@ -37,6 +38,7 @@ _OSC = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?")
 _CSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]?")
 _ESC = re.compile(r"\x1b[ -/]*[0-~]?")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+_CLOSER = re.compile(r"</\s*board-output", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -57,20 +59,24 @@ class RunResult:
 
 
 def wrap_untrusted(text: str) -> str:
-    """Wrap board text so it cannot close the wrapper (a literal '</board-output' is defused)."""
-    text = text.replace("</board-output", "&lt;/board-output")
+    """Wrap board text so it cannot close the wrapper (any '</board-output' is defused)."""
+    text = _CLOSER.sub("&lt;/board-output", text)
     return f'<board-output untrusted="true">{text}</board-output>'
 
 
-def clean_output(data: bytes) -> tuple[str, bool]:
-    """Decode, strip terminal escapes and control characters, truncate to head + tail."""
+def _clean(data: bytes) -> str:
     text = data.decode("utf-8", errors="replace")
     for pattern in (_OSC, _CSI, _ESC, _CONTROL):
         text = pattern.sub("", text)
-    if len(text) <= MAX_OUTPUT:
-        return text, False
-    omitted = len(text) - MAX_OUTPUT
-    return f"{text[:HEAD]}\n[… {omitted} bytes omitted …]\n{text[-TAIL:]}", True
+    return text
+
+
+def clean_output(head: bytes, tail: bytes, total: int) -> tuple[str, bool]:
+    """Clean head+tail (the first and last bytes of `total` bytes of output); mark what was omitted."""
+    omitted = total - len(head) - len(tail)
+    if omitted <= 0:
+        return _clean(head + tail), False
+    return f"{_clean(head)}\n[… {omitted} bytes omitted …]\n{_clean(tail)}", True
 
 
 def _write_private(path: Path, content: str, mode: int) -> None:
@@ -98,6 +104,9 @@ class SshManager:
         self._ssh = ssh_bin
         self._config_dir = Path(config_dir) if config_dir else paths.config_dir()
         self._runtime_dir = Path(runtime_dir) if runtime_dir else paths.runtime_dir()
+        for d in (self._config_dir, self._runtime_dir):
+            if "%" in str(d) or '"' in str(d):
+                raise ValueError(f'directory {d} contains "%" or a double quote, which ssh_config cannot take safely')
         self._locks: dict[str, asyncio.Lock] = {}
         self._blocks: dict[str, str] | None = None
 
@@ -119,7 +128,7 @@ class SshManager:
             config_path=str(self.config_path),
             ssh_line=f"ssh -F {cfg} {alias} '<command>'",
             scp_line=f"scp -F {cfg} <file> {alias}:",
-            include_line=f"Include {self.config_path}",
+            include_line=f'Include "{self.config_path}"',
         )
 
     # --- config files -------------------------------------------------------------
@@ -133,7 +142,7 @@ class SshManager:
                 text = ""
             for chunk in re.split(r"(?m)^(?=Host )", text):
                 if chunk.startswith("Host "):
-                    self._blocks[chunk.split(None, 2)[1]] = chunk if chunk.endswith("\n") else chunk + "\n"
+                    self._blocks[chunk.split(None, 2)[1]] = chunk.rstrip("\n") + "\n"
         return self._blocks
 
     def _block(self, board: BoardId, port: int) -> str:
@@ -143,10 +152,10 @@ class SshManager:
             f"    Port {port}\n"
             "    User pi\n"
             "    ControlMaster auto\n"
-            f"    ControlPath {self._runtime_dir}/cm-%C\n"
+            f'    ControlPath "{self._runtime_dir}/cm-%C"\n'
             "    ControlPersist 30m\n"
             "    StrictHostKeyChecking accept-new\n"
-            f"    UserKnownHostsFile {self._config_dir}/known_hosts\n"
+            f'    UserKnownHostsFile "{self._config_dir}/known_hosts"\n'
             "    BatchMode no\n"
             "    PreferredAuthentications password,keyboard-interactive\n"
             "    NumberOfPasswordPrompts 1\n"
@@ -155,36 +164,80 @@ class SshManager:
             "    RequestTTY no\n"
         )
 
-    # --- ssh invocations ----------------------------------------------------------
-
-    def _base(self, board: BoardId) -> list[str]:
-        return [self._ssh, "-F", str(self.config_path)]
-
-    async def _exec(self, args: list[str], timeout: float, env: dict[str, str] | None = None) -> tuple[int, str]:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            env=env,
-            start_new_session=True,
-        )
-        task = asyncio.ensure_future(proc.communicate())
-        done, _ = await asyncio.wait({task}, timeout=timeout)
-        if not done:
-            self._kill(proc)
-            out, _ = await task
-            return -1, out.decode("utf-8", errors="replace") + f"\n(timed out after {timeout:g} s)"
-        out, _ = task.result()
-        return proc.returncode, out.decode("utf-8", errors="replace")
+    # --- process helpers ----------------------------------------------------------
 
     @staticmethod
     def _kill(proc) -> None:
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(proc.pid, signal.SIGKILL)
 
-    async def _control(self, board: BoardId, op: str) -> int:
-        code, _ = await self._exec([*self._base(board), "-O", op, self.alias(board)], OP_TIMEOUT_S)
+    async def _supervise(self, args, timeout, *, env=None, stdout, reader=None):
+        """Spawn in its own session, wait at most `timeout`, kill the group on timeout.
+
+        Returns (returncode or None, timed_out, reader result). Every wait after the kill is bounded.
+        """
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=subprocess.STDOUT,
+            env=env,
+            start_new_session=True,
+        )
+        task = asyncio.ensure_future(reader(proc.stdout)) if reader else None
+        timed_out = False
+        try:
+            await asyncio.wait_for(proc.wait(), timeout)
+        except TimeoutError:
+            timed_out = True
+            self._kill(proc)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(proc.wait(), GRACE_S)
+        result = None
+        if task:
+            try:
+                result = await asyncio.wait_for(task, GRACE_S)
+            except TimeoutError:
+                pass
+        return (None if timed_out else proc.returncode), timed_out, result
+
+    async def _exec(self, args: list[str], timeout: float, env: dict[str, str] | None = None) -> tuple[int | None, str]:
+        """Run a short ssh command, output to a private temp file (a daemonised master could hold a pipe open)."""
+        fd, name = tempfile.mkstemp(dir=self._runtime_dir, prefix=".out-")
+        try:
+            try:
+                code, timed_out, _ = await self._supervise(args, timeout, env=env, stdout=fd)
+            finally:
+                os.close(fd)
+            out = Path(name).read_text(errors="replace")
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(name)
+        if timed_out:
+            out += f"\n(timed out after {timeout:g} s)"
+        return (-1 if timed_out else code), out
+
+    @staticmethod
+    async def _read_bounded(stream) -> tuple[bytes, bytes, int]:
+        """Read to EOF keeping only the first HEAD and last TAIL bytes; returns (head, tail, total)."""
+        head, tail, total = bytearray(), bytearray(), 0
+        while chunk := await stream.read(65536):
+            total += len(chunk)
+            room = HEAD - len(head)
+            if room > 0:
+                head += chunk[:room]
+                chunk = chunk[room:]
+            tail += chunk
+            if len(tail) > 2 * TAIL:
+                del tail[:-TAIL]
+        del tail[:-TAIL]
+        return bytes(head), bytes(tail), total
+
+    def _base(self) -> list[str]:
+        return [self._ssh, "-F", str(self.config_path)]
+
+    async def _control(self, board: BoardId, op: str) -> int | None:
+        code, _ = await self._exec([*self._base(), "-O", op, self.alias(board)], OP_TIMEOUT_S)
         return code
 
     async def check(self, board: BoardId) -> bool:
@@ -217,7 +270,7 @@ class SshManager:
             env["SSH_ASKPASS"] = str(self._config_dir / "askpass")
             env["SSH_ASKPASS_REQUIRE"] = "force"
             code, out = await self._exec(
-                [*self._base(board), "-o", "ClearAllForwardings=yes", "-MNf", self.alias(board)],
+                [*self._base(), "-o", "ClearAllForwardings=yes", "-MNf", self.alias(board)],
                 START_TIMEOUT_S,
                 env,
             )
@@ -228,9 +281,11 @@ class SshManager:
 
     async def run(self, board: BoardId, command: str, timeout_s: float) -> RunResult:
         self._require_ssh(board)
+        if not command.strip():
+            raise ValueError("command is empty")
         await self.ensure_master(board)
         args = [
-            *self._base(board),
+            *self._base(),
             "-o",
             "BatchMode=yes",
             "-o",
@@ -239,19 +294,9 @@ class SshManager:
             "--",
             command,
         ]
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
+        code, timed_out, data = await self._supervise(
+            args, timeout_s, stdout=subprocess.PIPE, reader=self._read_bounded
         )
-        task = asyncio.ensure_future(proc.communicate())
-        done, _ = await asyncio.wait({task}, timeout=timeout_s)
-        timed_out = not done
-        if timed_out:
-            self._kill(proc)
-        data, _ = await task
-        await proc.wait()
-        output, truncated = clean_output(data)
-        return RunResult(None if timed_out else proc.returncode, output, truncated, timed_out)
+        head, tail, total = data or (b"", b"", 0)
+        output, truncated = clean_output(head, tail, total)
+        return RunResult(code, output, truncated, timed_out)

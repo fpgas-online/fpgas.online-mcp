@@ -1,8 +1,12 @@
 """SshManager against a fake ssh binary."""
 
+import asyncio
+import contextlib
 import json
 import logging
+import os
 import shutil
+import signal
 import stat
 import time
 import uuid
@@ -44,6 +48,9 @@ def env(monkeypatch):
     sites = FakeSites()
     mgr = SshManager(sites, ssh_bin=str(fake), config_dir=cfg, runtime_dir=run)
     yield mgr, sites, cfg, log
+    for child in base.glob("state.*.child"):  # the fake's daemonised "master" process
+        with contextlib.suppress(ValueError, ProcessLookupError):
+            os.kill(int(child.read_text()), signal.SIGKILL)
     shutil.rmtree(base, ignore_errors=True)
 
 
@@ -67,8 +74,8 @@ async def test_ensure_master_writes_config_and_files(env):
         "ControlMaster auto",
         "ControlPersist 30m",
         "StrictHostKeyChecking accept-new",
-        f"UserKnownHostsFile {cfg}/known_hosts",
-        "ControlPath",
+        f'UserKnownHostsFile "{cfg}/known_hosts"',
+        f'ControlPath "{cfg.parent}/r/cm-%C"',
         "BatchMode no",
         "PreferredAuthentications password,keyboard-interactive",
         "NumberOfPasswordPrompts 1",
@@ -85,7 +92,7 @@ async def test_ensure_master_writes_config_and_files(env):
     assert stat.S_IMODE((cfg / "askpass").stat().st_mode) == 0o700
     assert info.ssh_line.startswith(f"ssh -F {cfg}/ssh_config fpgas-welland-pi-sw1-p2 ")
     assert info.scp_line.startswith(f"scp -F {cfg}/ssh_config ")
-    assert info.include_line == f"Include {cfg}/ssh_config"
+    assert info.include_line == f'Include "{cfg}/ssh_config"'
     start = [e for e in entries(log) if "-MNf" in e["argv"]]
     assert len(start) == 1 and start[0]["askpass_set"] and start[0]["askpass_exists"]
     assert start[0]["askpass_require"] == "force"
@@ -102,8 +109,6 @@ async def test_ensure_master_idempotent(env):
 
 
 async def test_concurrent_ensure_starts_one_master(env):
-    import asyncio
-
     mgr, sites, cfg, log = env
     await asyncio.gather(*(mgr.ensure_master(BOARD) for _ in range(4)))
     assert sum("-MNf" in e["argv"] for e in entries(log)) == 1
@@ -173,12 +178,22 @@ async def test_run_cleans_output(env):
 
 
 async def test_run_timeout_kills(env):
-    mgr, *_ = env
+    mgr, sites, cfg, log = env
     t = time.monotonic()
-    r = await mgr.run(BOARD, "echo started; sleep 30", 1)
+    pidfile = cfg.parent / "sleep.pid"
+    r = await mgr.run(BOARD, f"echo started; sleep 30 & echo $! > {pidfile}; wait", 1)
     assert time.monotonic() - t < 10
     assert r.timed_out and r.exit_status is None
     assert "started" in r.output
+    pid = int(pidfile.read_text())
+    for _ in range(40):  # the whole process group is gone
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        pytest.fail("remote sleep survived the timeout")
 
 
 async def test_no_tty_and_no_password_anywhere(env, caplog):
@@ -201,3 +216,50 @@ def test_wrap_untrusted():
     assert out.startswith('<board-output untrusted="true">') and out.endswith("</board-output>")
     assert out.count("</board-output") == 1
     assert "hello" in out
+
+
+def test_wrap_untrusted_case_insensitive():
+    out = wrap_untrusted("a </Board-Output > b </ board-output")
+    assert out.count("</board-output") == 1 and out.endswith("</board-output>")
+    assert "</Board" not in out and "</ board" not in out
+
+
+async def test_run_big_output_is_bounded(env):
+    mgr, *_ = env
+    r = await mgr.run(BOARD, "yes | head -c 50000000", 60)
+    assert r.truncated and r.exit_status == 0
+    assert "49991808 bytes omitted" in r.output
+    assert len(r.output) < 8300
+
+
+async def test_run_rejects_empty_command(env):
+    mgr, *_ = env
+    for c in ("", "  \n"):
+        with pytest.raises(ValueError):
+            await mgr.run(BOARD, c, 5)
+
+
+async def test_master_start_does_not_hang_on_daemonised_child(env, monkeypatch):
+    monkeypatch.setenv("FAKE_SSH_CHILD_S", "6")
+    mgr, *_ = env
+    t = time.monotonic()
+    await mgr.ensure_master(BOARD)
+    assert time.monotonic() - t < 4
+
+
+async def test_blocks_reloaded_without_blank_line_growth(env):
+    mgr, sites, cfg, log = env
+    await mgr.ensure_master(BOARD)
+    await mgr.ensure_master(BoardId("ps1", "pi3"))
+    first = (cfg / "ssh_config").read_text()
+    again = SshManager(sites, ssh_bin=mgr._ssh, config_dir=cfg, runtime_dir=mgr._runtime_dir)
+    await again.ensure_master(BoardId("welland", "pi-sw2-p1"))
+    text = (cfg / "ssh_config").read_text()
+    assert text.count("Host fpgas-") == 3 and "\n\n\n" not in text
+    assert first.count("\n\n") == 1
+
+
+def test_rejects_unsafe_dirs(tmp_path):
+    for bad in ("a%b", 'a"b'):
+        with pytest.raises(ValueError):
+            SshManager(FakeSites(), config_dir=tmp_path / bad, runtime_dir=tmp_path)
