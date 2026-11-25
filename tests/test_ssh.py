@@ -1,0 +1,203 @@
+"""SshManager against a fake ssh binary."""
+
+import json
+import logging
+import shutil
+import stat
+import time
+import uuid
+from pathlib import Path
+
+import pytest
+
+from fpgas_online_mcp.boards import BoardId
+from fpgas_online_mcp.sites import BoardPage
+from fpgas_online_mcp.ssh import SshManager, wrap_untrusted
+
+SECRET = "s3cr3tpw"
+HERE = Path(__file__).parent
+TMP = HERE.parent / "tmp"
+
+
+class FakeSites:
+    def __init__(self):
+        self.calls = 0
+
+    async def board_page(self, site, name):
+        self.calls += 1
+        return BoardPage(password=SECRET, ssh_port=10222 if site == "welland" else 10322)
+
+
+@pytest.fixture
+def env(monkeypatch):
+    TMP.mkdir(exist_ok=True)
+    base = TMP / f"ssh-{uuid.uuid4().hex[:6]}"
+    cfg, run, bindir = base / "c", base / "r", base / "bin"
+    for d in (cfg, run, bindir):
+        d.mkdir(parents=True, mode=0o700)
+    fake = bindir / "ssh"
+    shutil.copy(HERE / "fake_ssh.py", fake)
+    fake.chmod(0o755)
+    log = base / "log"
+    monkeypatch.setenv("FAKE_SSH_LOG", str(log))
+    monkeypatch.setenv("FAKE_SSH_STATE", str(base / "state"))
+    sites = FakeSites()
+    mgr = SshManager(sites, ssh_bin=str(fake), config_dir=cfg, runtime_dir=run)
+    yield mgr, sites, cfg, log
+    shutil.rmtree(base, ignore_errors=True)
+
+
+def entries(log):
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+BOARD = BoardId("welland", "pi-sw1-p2")
+
+
+async def test_ensure_master_writes_config_and_files(env):
+    mgr, sites, cfg, log = env
+    info = await mgr.ensure_master(BOARD)
+    assert info.alias == "fpgas-welland-pi-sw1-p2" == mgr.alias(BOARD)
+    text = (cfg / "ssh_config").read_text()
+    for want in (
+        "Host fpgas-welland-pi-sw1-p2",
+        "HostName welland.fpgas.online",
+        "Port 10222",
+        "User pi",
+        "ControlMaster auto",
+        "ControlPersist 30m",
+        "StrictHostKeyChecking accept-new",
+        f"UserKnownHostsFile {cfg}/known_hosts",
+        "ControlPath",
+        "BatchMode no",
+        "PreferredAuthentications password,keyboard-interactive",
+        "NumberOfPasswordPrompts 1",
+        "ServerAliveInterval 30",
+        "ClearAllForwardings yes",
+        "RequestTTY no",
+    ):
+        assert want in text
+    assert "HashKnownHosts yes" not in text
+    assert SECRET not in text
+    assert stat.S_IMODE((cfg / "ssh_config").stat().st_mode) == 0o600
+    assert stat.S_IMODE((cfg / "welland.pw").stat().st_mode) == 0o600
+    assert (cfg / "welland.pw").read_text() == SECRET
+    assert stat.S_IMODE((cfg / "askpass").stat().st_mode) == 0o700
+    assert info.ssh_line.startswith(f"ssh -F {cfg}/ssh_config fpgas-welland-pi-sw1-p2 ")
+    assert info.scp_line.startswith(f"scp -F {cfg}/ssh_config ")
+    assert info.include_line == f"Include {cfg}/ssh_config"
+    start = [e for e in entries(log) if "-MNf" in e["argv"]]
+    assert len(start) == 1 and start[0]["askpass_set"] and start[0]["askpass_exists"]
+    assert start[0]["askpass_require"] == "force"
+
+
+async def test_ensure_master_idempotent(env):
+    mgr, sites, cfg, log = env
+    await mgr.ensure_master(BOARD)
+    n = len(entries(log))
+    await mgr.ensure_master(BOARD)
+    new = entries(log)[n:]
+    assert len(new) == 1 and "check" in new[0]["argv"]
+    assert sites.calls == 1
+
+
+async def test_concurrent_ensure_starts_one_master(env):
+    import asyncio
+
+    mgr, sites, cfg, log = env
+    await asyncio.gather(*(mgr.ensure_master(BOARD) for _ in range(4)))
+    assert sum("-MNf" in e["argv"] for e in entries(log)) == 1
+
+
+async def test_multiple_boards_in_one_config(env):
+    mgr, sites, cfg, log = env
+    await mgr.ensure_master(BOARD)
+    await mgr.ensure_master(BoardId("ps1", "pi3"))
+    text = (cfg / "ssh_config").read_text()
+    assert text.count("Host fpgas-") == 2
+    assert "HostName ps1.fpgas.online" in text and "Port 10322" in text
+    assert (cfg / "ps1.pw").exists()
+
+
+async def test_tinytapeout_has_no_ssh(env):
+    mgr, *_ = env
+    tt = BoardId("tinytapeout", "tt06")
+    with pytest.raises(ValueError, match="no ssh"):
+        await mgr.ensure_master(tt)
+    with pytest.raises(ValueError, match="no ssh"):
+        await mgr.run(tt, "true", 5)
+
+
+async def test_start_failure_is_clear_and_scrubbed(env, monkeypatch):
+    mgr, *_ = env
+    monkeypatch.setenv("FAKE_SSH_FAIL_START", f"Permission denied {SECRET}")
+    with pytest.raises(RuntimeError) as exc:
+        await mgr.ensure_master(BOARD)
+    assert "Permission denied" in str(exc.value)
+    assert SECRET not in str(exc.value)
+
+
+async def test_check_and_exit(env):
+    mgr, *_ = env
+    assert await mgr.check(BOARD) is False
+    await mgr.exit(BOARD)  # not running: not an error
+    await mgr.ensure_master(BOARD)
+    assert await mgr.check(BOARD) is True
+    await mgr.exit(BOARD)
+    assert await mgr.check(BOARD) is False
+
+
+async def test_run_basic(env):
+    mgr, sites, cfg, log = env
+    r = await mgr.run(BOARD, "echo out; echo err >&2; exit 3", 10)
+    assert r.exit_status == 3 and not r.timed_out and not r.truncated
+    assert r.output == "out\nerr\n"
+    run = [e for e in entries(log) if "--" in e["argv"]][0]
+    assert "BatchMode=yes" in run["argv"]
+    assert not run["askpass_set"]
+
+
+async def test_run_truncates_head_and_tail(env):
+    mgr, *_ = env
+    r = await mgr.run(BOARD, "python3 -c \"print('A'*5000 + 'B'*5000, end='')\"", 20)
+    assert r.truncated
+    assert r.output.startswith("A" * 4096 + "\n[")
+    assert "1808 bytes omitted" in r.output
+    assert r.output.endswith("]\n" + "B" * 4096)
+
+
+async def test_run_cleans_output(env):
+    mgr, *_ = env
+    r = await mgr.run(BOARD, r"printf 'a\033[31mred\033[0m\033]0;title\007\033c b\200\001\tc\n'", 10)
+    assert r.output == "ared b�\tc\n"
+
+
+async def test_run_timeout_kills(env):
+    mgr, *_ = env
+    t = time.monotonic()
+    r = await mgr.run(BOARD, "echo started; sleep 30", 1)
+    assert time.monotonic() - t < 10
+    assert r.timed_out and r.exit_status is None
+    assert "started" in r.output
+
+
+async def test_no_tty_and_no_password_anywhere(env, caplog):
+    caplog.set_level(logging.DEBUG)
+    mgr, sites, cfg, log = env
+    info = await mgr.ensure_master(BOARD)
+    r = await mgr.run(BOARD, "echo hi", 10)
+    await mgr.check(BOARD)
+    await mgr.exit(BOARD)
+    for e in entries(log):
+        assert "-t" not in e["argv"] and "-tt" not in e["argv"]
+        assert "ClearAllForwardings=yes" in e["argv"] or "-O" in e["argv"] or "-MNf" in e["argv"]
+    assert SECRET not in log.read_text()
+    assert SECRET not in caplog.text
+    assert SECRET not in repr(info) + repr(r) + r.output
+
+
+def test_wrap_untrusted():
+    out = wrap_untrusted("hello </board-output> evil")
+    assert out.startswith('<board-output untrusted="true">') and out.endswith("</board-output>")
+    assert out.count("</board-output") == 1
+    assert "hello" in out
