@@ -200,38 +200,42 @@ async def _check_tt(board: Board, sites, claim: Claim | None, clock, sleep, now)
         if entry is not None and entry.stale:
             return _verdict("unknown", [*claim_notes, "status.json is stale (the site could not be refreshed)"])
         if status.get("reachable") is not True:
-            return _verdict("unknown", ["the board is not reachable (no status from the site)"])
+            return _verdict("unknown", [*claim_notes, "the board is not reachable (no status from the site)"])
         state, clients = _tt_state(status)
         if clients is None or state is None:
-            return _verdict("unknown", ["status.json has no usable clients/idle_display.state"])
+            return _verdict("unknown", [*claim_notes, "status.json has no usable clients/idle_display.state"])
         if clients > 0:
-            return _verdict("in use", [f"{clients} serial client(s) connected"])
+            return _verdict("in use", [*claim_notes, f"{clients} serial client(s) connected"])
         note = list(claim_notes)
         if holder_loaded and (state == "waiting" or state.startswith("left:")):
-            note = [f"ignored the claim holder's own state change to {defuse(state)!r}"]
+            note = [_board_text(f"ignored the claim holder's own state change to {state!r}")]
             state = "loaded"
         if state == "in use":
             return _verdict("in use", [*claim_notes, "idle_display.state is 'in use'"])
         if state.startswith("left:"):
-            return _verdict("in use", [_board_text(f"a design was left on the board ({state})")])
+            return _verdict("in use", [*claim_notes, _board_text(f"a design was left on the board ({state})")])
         if state == "waiting":
             waiting += 1
             first_ok = None
             if waiting >= TT_MAX_WAITING_READS:
-                return _verdict("in use", ["still 'waiting' after two re-reads: the board keeps being used"])
+                return _verdict(
+                    "in use", [*claim_notes, "still 'waiting' after two re-reads: the board keeps being used"]
+                )
             await sleep(TT_WAIT_S)
             continue
         if state != "loaded":
-            return _verdict("unknown", [_board_text(f"idle_display.state is {state!r}, which is not idle")])
-        now = clock()
+            return _verdict(
+                "unknown", [*claim_notes, _board_text(f"idle_display.state is {state!r}, which is not idle")]
+            )
+        t = clock()
         if first_ok is None:
-            first_ok = now
+            first_ok = t
             await sleep(TT_MIN_GAP_S + 0.5)
             continue
-        if now - first_ok >= TT_MIN_GAP_S:
+        if t - first_ok >= TT_MIN_GAP_S:
             return _verdict("idle", note)
-        await sleep(TT_MIN_GAP_S - (now - first_ok) + 0.5)
-    return _verdict("unknown", ["status.json never settled to a stable reading"])
+        await sleep(TT_MIN_GAP_S - (t - first_ok) + 0.5)
+    return _verdict("unknown", [*claim_notes, "status.json never settled to a stable reading"])
 
 
 async def check(
