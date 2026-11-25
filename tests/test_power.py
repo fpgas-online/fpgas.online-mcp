@@ -45,8 +45,10 @@ def idle(*a, **k):
 
 
 class Sites:
-    def __init__(self, clock, toggle=None, boot=OLD, registry_after=None, tt=None, page=None):
-        self.clock, self.calls, self.boot = clock, [], boot
+    def __init__(self, clock, toggle=None, boot=OLD, tt=None, page=None, order=None):
+        self.clock, self.calls, self.boot = clock, [], boot  # boot: str, or callable(now, toggled_at)
+        self.order = order if order is not None else []
+        self.page_live = []
         self._toggle = toggle or ToggleResult(200, {"2": ["off", "on"]}, None)
         self.tt = tt  # callable(clock.t) -> status dict
         self.page = page or BoardPage(tt_port="9", tt_switch="2")
@@ -54,19 +56,24 @@ class Sites:
 
     async def welland_registry(self, live=False):
         assert live
-        net = {"boot_id": self.boot, "current_boot": True}
+        boot = self.boot(self.clock.t, self.toggled_at) if callable(self.boot) else self.boot
+        net = {"boot_id": boot, "current_boot": True}
         return [{"hostname": "pi-sw1-p2", "network": net}], ENTRY
 
     async def tt_status(self, slug, live=False):
         assert live
         return self.tt(self.clock.t), ENTRY
 
-    async def board_page(self, site, name):
+    async def board_page(self, site, name, live=False):
+        self.page_live.append(live)
         return self.page
 
     async def toggle(self, site, port, switch):
         self.calls.append((site, port, switch))
+        self.order.append("toggle")
         self.toggled_at = self.clock.t
+        if isinstance(self._toggle, Exception):
+            raise self._toggle
         return self._toggle
 
 
@@ -75,16 +82,21 @@ class Ssh:
 
     def __init__(self, clock, sites, answers):
         self.clock, self.sites, self.answers, self.exits, self.runs = clock, sites, answers, 0, 0
+        self.timeouts = []
 
     async def exit(self, board):
         self.exits += 1
+        self.sites.order.append("exit")
 
     async def run(self, board, command, timeout_s):
         assert command == "cat /proc/sys/kernel/random/boot_id"
         self.runs += 1
+        self.timeouts.append((self.clock.t, timeout_s))
         out = self.answers(self.clock.t, self.sites.toggled_at)
         if out is None:
             raise OSError("connection refused")
+        if isinstance(out, RunResult):
+            return out
         return RunResult(0, out, False, False)
 
 
@@ -113,15 +125,35 @@ async def test_welland_success_waits_for_new_boot_id_not_empty():
     assert r.ok and r.seconds_to_back == 80  # first poll at 10 s steps after 71 s
     assert sites.calls == [("welland", "2", 1)]
     assert "boot id read" in r.steps and any(s.startswith("back at +") for s in r.steps)
-    assert ssh.exits >= 2  # before the toggle, and fresh masters while polling
+    assert ssh.exits == 1  # the master is closed once, before the toggle
+    assert sites.order == ["exit", "toggle"]
+    assert all(t + to <= sites.toggled_at + 300 for t, to in ssh.timeouts[1:])
 
 
-async def test_welland_registry_missing_falls_back_to_ssh():
+async def test_welland_registry_id_differing_from_ssh_id_is_not_a_reboot():
     clock = Clock()
-    sites = Sites(clock, boot=None)
-    ssh = Ssh(clock, sites, reboot_after(30))
+    sites = Sites(clock, boot=NEW)  # the registry stores another id than ssh reports
+    ssh = Ssh(clock, sites, lambda n, t: OLD)
     r = await run(board(), sites, ssh, clock)
-    assert r.ok
+    assert not r.ok and r.message == power.NOT_POE
+
+
+async def test_welland_ssh_unreadable_falls_back_to_registry_and_needs_ssh_too():
+    clock = Clock()
+    # registry shows the new boot after 40 s; ssh answers (new id) only from 60 s
+    sites = Sites(clock, boot=lambda n, t: OLD if t is None or n - t < 40 else NEW)
+    ssh = Ssh(clock, sites, lambda n, t: None if t is None or n - t < 60 else NEW)
+    r = await run(board(), sites, ssh, clock)
+    assert r.ok and r.seconds_to_back == 60
+    assert "boot id from the registry (ssh failed)" in r.steps
+
+
+async def test_welland_registry_fallback_without_ssh_never_comes_back():
+    clock = Clock()
+    sites = Sites(clock, boot=lambda n, t: OLD if t is None else NEW)
+    ssh = Ssh(clock, sites, lambda n, t: None)
+    r = await run(board(), sites, ssh, clock)
+    assert not r.ok and "within 5 minutes" in r.message
 
 
 async def test_ps1_success_port_is_string_and_no_switch():
@@ -174,16 +206,50 @@ async def test_other_error_status_carries_site_message():
     assert not r.ok and "the switch did not confirm" in r.message and r.retry_after is None
 
 
-async def test_toggle_network_error_is_refusal():
+async def test_lost_toggle_response_but_board_restarts_is_ok_with_note():
+    clock = Clock()
+    sites = Sites(clock, toggle=SiteError("welland: cannot reach the site (ReadTimeout)"))
+    r = await run(board(), sites, Ssh(clock, sites, reboot_after(30)), clock)
+    assert r.ok and "toggle response was lost" in r.message and len(sites.calls) == 1
+
+
+async def test_lost_toggle_response_and_no_restart_says_wait_and_check():
+    clock = Clock()
+    sites = Sites(clock, toggle=SiteError("welland: cannot reach the site (ReadTimeout)"))
+    r = await run(board(), sites, Ssh(clock, sites, lambda n, t: OLD), clock)
+    assert not r.ok and "may have reached the switch" in r.message and "at least 60 s" in r.message
+    assert len(sites.calls) == 1
+
+
+async def test_429_without_retry_after():
+    clock = Clock()
+    sites = Sites(clock, toggle=ToggleResult(429, {}, None))
+    r = await run(board(), sites, Ssh(clock, sites, lambda n, t: OLD), clock)
+    assert not r.ok and r.retry_after is None and "about a minute" in r.message
+
+
+async def test_unparseable_names_refuse():
+    clock = Clock()
+    for b in (board("welland", "pi-sw1-p2x"), board("ps1", "pi21 "), board("ps1", "raspberry")):
+        sites = Sites(clock)
+        r = await run(b, sites, Ssh(clock, sites, lambda n, t: OLD), clock)
+        assert not r.ok and "switch port" in r.message and sites.calls == []
+
+
+async def test_port_is_normalised():
     clock = Clock()
     sites = Sites(clock)
+    await run(board("welland", "pi-sw01-p02"), sites, Ssh(clock, sites, reboot_after(20)), clock)
+    assert sites.calls == [("welland", "2", 1)]
 
-    async def boom(*a):
-        raise SiteError("welland: down")
 
-    sites.toggle = boom
-    r = await run(board(), sites, Ssh(clock, sites, lambda n, t: OLD), clock)
-    assert not r.ok and "welland: down" in r.message
+@pytest.mark.parametrize("bad", [RunResult(1, NEW, False, False), RunResult(None, NEW, False, True)])
+async def test_ps1_failed_or_timed_out_probe_is_not_back(bad):
+    clock = Clock()
+    sites = Sites(clock)
+    ssh = Ssh(clock, sites, lambda n, t: OLD if t is None else bad)
+    r = await run(board("ps1", "pi21"), sites, ssh, clock)
+    assert not r.ok and "within 5 minutes" in r.message
 
 
 @pytest.mark.parametrize("verdict", ["in use", "unknown"])
@@ -245,6 +311,7 @@ async def test_tt_success_uses_uptime_below_elapsed():
     ssh = Ssh(clock, sites, lambda n, t: None)
     r = await run(board("tinytapeout", "fpga-2"), sites, ssh, clock)
     assert r.ok and sites.calls == [("tinytapeout", "9", 2)] and ssh.runs == 0
+    assert sites.page_live == [True]  # the port is read live, never from the cache
     assert r.seconds_to_back == 20
 
 
@@ -263,3 +330,6 @@ async def test_tt_unreadable_uptime_refuses_and_empty_port_refuses():
     sites = Sites(clock, tt=tt_status(None), page=BoardPage(tt_port="", tt_switch=""))
     r = await run(board("tinytapeout", "fpga-2"), sites, Ssh(clock, sites, lambda n, t: None), clock)
     assert not r.ok and "nothing to cycle" in r.message and sites.calls == []
+    sites = Sites(clock, tt=tt_status(None), page=BoardPage(tt_port="9", tt_switch="x"))
+    r = await run(board("tinytapeout", "fpga-2"), sites, Ssh(clock, sites, lambda n, t: None), clock)
+    assert not r.ok and "no usable switch" in r.message and sites.calls == []

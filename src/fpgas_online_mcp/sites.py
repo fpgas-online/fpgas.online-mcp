@@ -167,10 +167,11 @@ class SiteClient:
             live,
         )
 
-    async def board_page(self, site: str, name: str) -> BoardPage:
+    async def board_page(self, site: str, name: str, live: bool = False) -> BoardPage:
+        """live=True fetches now, stores the result and never serves a cached or stale page."""
         self._check_name(site, name)
         path = f"/board/{name}/" if site == "tinytapeout" else f"/fpgas/{name}.html"
-        page, _ = await self._get(site, path, TTL_BOARD_PAGE_S, lambda data: _parse_board_page(site, data))
+        page, _ = await self._get(site, path, TTL_BOARD_PAGE_S, lambda data: _parse_board_page(site, data), live)
         return page
 
     async def toggle(self, site: str, port: str, switch: int | None) -> ToggleResult:

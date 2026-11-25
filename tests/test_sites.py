@@ -202,6 +202,15 @@ async def test_live_bypasses_cache(client, site):
     assert site.count("/board/tt06/status.json") == 2  # live result was stored
 
 
+async def test_board_page_live_bypasses_cache(client, site):
+    await client.board_page("tinytapeout", "tt-ab2a48a7ee008dd9")
+    await client.board_page("tinytapeout", "tt-ab2a48a7ee008dd9")
+    assert site.count("/board/tt-ab2a48a7ee008dd9/") == 1
+    page = await client.board_page("tinytapeout", "tt-ab2a48a7ee008dd9", live=True)
+    assert page == BoardPage(tt_port="11", tt_switch="2")
+    assert site.count("/board/tt-ab2a48a7ee008dd9/") == 2
+
+
 async def test_live_failure_is_not_served_stale(client, site):
     await client.tt_status("tt06")
     site.fail = True

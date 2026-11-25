@@ -80,6 +80,7 @@ async def test_ensure_master_writes_config_and_files(env):
         "PreferredAuthentications password,keyboard-interactive",
         "NumberOfPasswordPrompts 1",
         "ServerAliveInterval 30",
+        "ConnectTimeout 5",
         "ClearAllForwardings yes",
         "RequestTTY no",
     ):

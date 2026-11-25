@@ -165,6 +165,7 @@ class SshManager:
             "    PreferredAuthentications password,keyboard-interactive\n"
             "    NumberOfPasswordPrompts 1\n"
             "    ServerAliveInterval 30\n"
+            "    ConnectTimeout 5\n"
             "    ClearAllForwardings yes\n"
             "    RequestTTY no\n"
         )
