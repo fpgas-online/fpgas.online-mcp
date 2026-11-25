@@ -20,9 +20,12 @@ from pydantic import Field
 from . import __version__, client, paths
 from .client import BrokerClient, BrokerError
 from .ops import LIMIT, RUN_LIMIT, compact
+from .ssh import wrap_untrusted
 
 NAME = "fpgas-online"
 READ_ONLY_OPS = {"guide", "list_boards", "board_status", "claims"}
+CLAIM_OPS = ("claim_board", "connect", "run", "power_cycle")
+_OPEN, _CLOSE = wrap_untrusted("").split("</", 1)[0], "</board-output>"
 
 INSTRUCTIONS = (
     "Boards on fpgas.online (sites welland, ps1, tinytapeout) are shared with people and other agents. "
@@ -56,24 +59,55 @@ def _error_text(e: BrokerError) -> str:
         log = paths.state_dir() / "broker.log"
         return f"Error: the fpgas-online broker hit an internal error (see {log}); retry once, then tell the user."
     if e.code == "start_failed":
-        return f"Error: {e.message}. Retry once; if it fails again, tell the user."
-    return f"Error: {e.message}."
+        text = f"Error: {e.message}. Retry once; if it fails again, tell the user."
+    else:
+        text = f"Error: {e.message}."
+    if len(text.encode()) > LIMIT:  # never cut: the message may hold wrapped board text
+        log = paths.state_dir() / "broker.log"
+        return f"Error ({e.code}): the message was too long to show; see {log}. Retry later or pick another board."
+    return text
+
+
+def _render_once(result: Any) -> str:
+    """Compact JSON; a run's wrapped board output goes after it, unescaped; a lone text is shown as is."""
+    if isinstance(result, dict) and "text" in result and len(result) == 1:
+        return result["text"]
+    output = None
+    if isinstance(result, dict) and "output" in result:
+        result = dict(result)
+        output = result.pop("output")
+    return compact(result) + (f"\n{output}" if output is not None else "")
+
+
+def _shrink(value: str, by: int) -> str:
+    """value shorter by at least `by` bytes, keeping a board-output wrapper whole."""
+    inner, wrapped = value, value.startswith(_OPEN) and value.endswith(_CLOSE)
+    if wrapped:
+        inner = value[len(_OPEN) : -len(_CLOSE)]
+    data = inner.encode()
+    keep = max(0, len(data) - by - 32)
+    inner = data[:keep].decode(errors="ignore") + "\n[… cut at the size limit]"
+    return f"{_OPEN}{inner}{_CLOSE}" if wrapped else inner
 
 
 def _render(result: Any, limit: int) -> str:
-    """Compact JSON; a run's wrapped board output goes after it, unescaped. Never more than limit bytes."""
-    output = None
-    if isinstance(result, dict) and "text" in result and len(result) == 1:
-        text = result["text"]
-    else:
-        if isinstance(result, dict) and "output" in result:
-            result = dict(result)
-            output = result.pop("output")
-        text = compact(result) + (f"\n{output}" if output is not None else "")
-    data = text.encode()
-    if len(data) > limit:  # the broker fits its results; this is only a backstop
-        text = data[: limit - 40].decode(errors="ignore") + "\n[… result cut at the size limit]"
-    return text
+    """Render within limit bytes. The broker fits its results; this backstop shrinks the largest text
+    field (never cutting a board-output wrapper or the JSON) and otherwise gives a short valid error."""
+    text = _render_once(result)
+    if len(text.encode()) <= limit:
+        return text
+    if isinstance(result, dict):
+        result = dict(result)
+        for _ in range(8):
+            strings = [k for k, v in result.items() if isinstance(v, str)]
+            if not strings:
+                break
+            key = max(strings, key=lambda k: len(result[k].encode()))
+            result[key] = _shrink(result[key], len(text.encode()) - limit)
+            text = _render_once(result)
+            if len(text.encode()) <= limit:
+                return text
+    return compact({"error": "the result was too large to show; narrow the request (filter by site, shorter output)"})
 
 
 def _result(text: str, is_error: bool = False) -> CallToolResult:
@@ -110,17 +144,27 @@ class Frontend:
         self._idle.append(conn)
         return result
 
+    async def _prune(self) -> None:
+        """Forget remembered claim ids that are no longer live (expired, or released elsewhere)."""
+        try:
+            live = {c["claim_id"] for c in (await self.call("claims"))["claims"]}
+        except BrokerError:
+            return
+        self.claim_ids = [i for i in self.claim_ids if i in live]
+
     async def close(self) -> None:
         while self._idle:
             await self._idle.pop().close()
 
     async def tool(self, op: str, limit: int = LIMIT, **args: Any) -> CallToolResult:
         args = {k: v for k, v in args.items() if v is not None}
-        if op in ("claim_board", "connect", "run", "power_cycle"):
+        if op in CLAIM_OPS:
             args["claim_ids"] = list(self.claim_ids)
         try:
             result = await self.call(op, **args)
         except BrokerError as e:
+            if e.code in ("no_claim", "claimed") and self.claim_ids:
+                await self._prune()
             return _result(_error_text(e), is_error=True)
         if op == "claim_board" and result["claim_id"] not in self.claim_ids:
             self.claim_ids.append(result["claim_id"])

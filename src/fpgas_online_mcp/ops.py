@@ -10,8 +10,9 @@ connection. No claim -> an error naming claim_board.
 """
 
 import json
+import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from . import guide, inuse, power
@@ -22,7 +23,10 @@ from .protocol import BrokerError
 from .sites import SiteClient, SiteError
 from .ssh import SshManager, defuse, wrap_untrusted
 
+log = logging.getLogger(__name__)
+
 LIMIT = 4096
+SSH_DETAIL_LIMIT = 1024
 RUN_LIMIT = 8192
 RUN_HEADER_RESERVE = 512  # room for the run result's other fields next to the output
 MAX_RUN_TIMEOUT_S = 600
@@ -65,6 +69,11 @@ class State:
     power_cycle: Callable = power.power_cycle
     conn_claims: dict[Conn, set[str]] = field(default_factory=dict)
     holder_conns: dict[str, set[Conn]] = field(default_factory=dict)
+
+    async def check(self, board: Board, ssh, sites, claim: Claim | None, **kw):
+        """The in-use check with its signals joined and wrapped once as untrusted board text."""
+        v = await self.inuse_check(board, ssh, sites, claim, **kw)
+        return replace(v, signals=[wrap_untrusted("; ".join(v.signals))] if v.signals else [])
 
     # --- connected holders ------------------------------------------------------------------------
 
@@ -131,8 +140,8 @@ def _claim_view(c: Claim, conn: Conn) -> dict:
     }
     if c.override_reason:
         view["override_reason"] = c.override_reason
+    view["claim_id"] = c.claim_id  # the id is the authority; shown to everyone (spec)
     if conn.holder is not None and c.holder == conn.holder:
-        view["claim_id"] = c.claim_id
         view["yours"] = True
     return view
 
@@ -263,7 +272,7 @@ async def op_board_status(state: State, args: dict, conn: Conn) -> dict:
     claim = state.claims.for_board(str(board.id))
     result = {"board": _board_view(board, claim, conn, full=True)}
     if args.get("check_use", True) is not False:
-        result["in_use"] = _verdict_view(await state.inuse_check(board, state.ssh, state.sites, None))
+        result["in_use"] = _verdict_view(await state.check(board, state.ssh, state.sites, None))
     return result
 
 
@@ -299,7 +308,7 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
     verdict = None
     tt_state = None
     if renew_id is None:
-        verdict = await state.inuse_check(board, state.ssh, state.sites, None)
+        verdict = await state.check(board, state.ssh, state.sites, None)
         if verdict.verdict != "idle" and override is None:
             signals = "; ".join(verdict.signals)
             raise BrokerError(
@@ -334,6 +343,7 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
         "started": _iso(claim.started),
         "expires": _iso(claim.expires),
         "renewed": renew_id is not None,
+        "as_of": _now(),
         "next": "connect / run / power_cycle use this claim; keep claim_id to pass it after a restart; "
         "release_board when done",
     }
@@ -354,7 +364,15 @@ async def op_release_board(state: State, args: dict, conn: Conn) -> dict:
         ) from None
     for ids in state.conn_claims.values():
         ids.discard(claim_id)
-    return {"released": claim_id}
+    return {"released": claim_id, "as_of": _now()}
+
+
+def _ssh_error(board: Board, e: Exception, next_step: str) -> BrokerError:
+    """ssh's own text can carry a host's pre-auth banner: log it all, show at most 1 KB of it wrapped."""
+    detail = str(e)
+    log.warning("ssh to %s failed: %s", board.id, detail)
+    shown, _ = _fit_bytes(defuse(detail), SSH_DETAIL_LIMIT)
+    return BrokerError("ssh", f"ssh to {board.id} failed: {wrap_untrusted(shown)}; {next_step}")
 
 
 async def op_connect(state: State, args: dict, conn: Conn) -> dict:
@@ -365,7 +383,7 @@ async def op_connect(state: State, args: dict, conn: Conn) -> dict:
     except ValueError as e:
         raise BrokerError("no_ssh", f"{e}; use board_status and the guide topic tinytapeout") from e
     except (RuntimeError, SiteError) as e:
-        raise BrokerError("ssh", f"{e}; check board_status and retry later, or pick another board") from e
+        raise _ssh_error(board, e, "check board_status and retry later, or pick another board") from e
     return {
         "board": str(board.id),
         "claim_id": claim.claim_id,
@@ -375,6 +393,7 @@ async def op_connect(state: State, args: dict, conn: Conn) -> dict:
         "scp": info.scp_line,
         "include": f"to use plain `ssh {info.alias}`, the user can add this line to ~/.ssh/config: {info.include_line}",
         "rules": "non-interactive commands only: never ssh -t, never kill or exit the shared tmux",
+        "as_of": _now(),
     }
 
 
@@ -398,7 +417,7 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
     except ValueError as e:
         raise BrokerError("no_ssh", str(e)) from e
     except (RuntimeError, SiteError) as e:
-        raise BrokerError("ssh", f"{e}; check board_status and retry later") from e
+        raise _ssh_error(board, e, "check board_status and retry later") from e
     budget = RUN_LIMIT - RUN_HEADER_RESERVE - len(wrap_untrusted("").encode())
     output, cut = _fit_bytes(defuse(r.output), budget)
     return {
@@ -414,7 +433,7 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
 async def op_power_cycle(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = _claim_for(state, board, args, conn)
-    r = await state.power_cycle(board, claim, state.sites, state.ssh)
+    r = await state.power_cycle(board, claim, state.sites, state.ssh, inuse_check=state.check)
     return {
         "board": str(board.id),
         "ok": r.ok,
@@ -441,7 +460,7 @@ async def op_claims(state: State, args: dict, conn: Conn) -> dict:
         view["board"] = c.board
         view["started"] = _iso(c.started)
         claims.append(view)
-    return {"claims": claims}
+    return {"claims": claims, "as_of": _now()}
 
 
 OPS = {
