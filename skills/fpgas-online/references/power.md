@@ -55,14 +55,16 @@ content type gets 403 `expected Content-Type: application/json; nothing was sent
 The body names the switch port. Take it from the host name (boards.md): `port` is a
 **string** (ps1 answers an integer with HTTP 500; welland accepts either).
 
-**ps1: ask the user before any toggle.** On ps1 the link from host name to switch port is
-unverified: a toggle for `pi21` answered `["off","on"]` but `pi21` did not reboot, so it may
-have cut power to some other board, one nobody checked.
+**ps1: the toggle reaches the right port, but the host may not need it.** A toggle for `pi21`
+answered `["off","on"]` and the switch did cycle port 21; `pi21` has no PoE HAT (it runs from
+a USB-C supply), so it did not lose power. Other ps1 hosts checked have no PoE HAT either.
+After a ps1 toggle, check the boot id (below). If it is unchanged, the site cannot reset that
+host: tell the user it must be reset by hand. There is no hold on ps1.
 
 | Site | Body | Where the numbers come from |
 | --- | --- | --- |
 | welland | `{"port":"2","switch":1}` | host `pi-sw<S>-p<P>`: `switch` = S (a number), `port` = P |
-| ps1 | `{"port":"<N>"}` | host `pi<N>`: `port` = N (unverified, see above); no `switch` (ps1 has one switch) |
+| ps1 | `{"port":"<N>"}` | host `pi<N>`: `port` = N; no `switch` (ps1 has one switch) |
 | tinytapeout | `{"port":"9","switch":2}` | the `data-port` and `data-switch` attributes of the board page (see below) |
 
 Read-only state check (never changes anything; works on all three sites):
@@ -82,7 +84,7 @@ curl -sS -A fpgas-online-skill -X POST -H 'Content-Type: application/json' \
 ```
 
 Returns after about 1-2 s with `{"2": ["off", "on"]}` (the switch's confirmed state after
-each step; the key is the port). For ps1 (after asking the user) use
+each step; the key is the port). For ps1 use
 `-d '{"port":"<N>"}' https://ps1.fpgas.online/snmp/toggle`.
 
 Other answers (JSON `{"error": ...}`): 403 not a board this site offers (nothing was
@@ -173,8 +175,8 @@ done
 ```
 
 Measured on ps1 `pi21`: the toggle answered `["off","on"]` but the boot id (and
-`uptime -s`) never changed, so the loop above reports "NOT restarted"; the port may not
-feed that host. Report it and do not cycle again.
+`uptime -s`) never changed, so the loop above reports "NOT restarted"; the host is
+probably not powered by PoE. Tell the user to reset it by hand; do not cycle again.
 
 tinytapeout: the board is back when `status.json` shows it reachable and present **and**
 the daemon restarted after the toggle (`uptime_s` smaller than the seconds since `T0`). A
