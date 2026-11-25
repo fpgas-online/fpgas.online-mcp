@@ -10,7 +10,7 @@ from test_mcp import REPO_TMP, UNTRUSTED, WELLAND
 from test_mcp import stack as stack  # noqa: F401  (fixture)
 
 import fpgas_online_mcp
-from fpgas_online_mcp.cli import main
+from fpgas_online_mcp.cli import _presence, main
 from fpgas_online_mcp.inuse import Verdict
 
 
@@ -145,7 +145,10 @@ async def test_claim_default_minutes_and_cli_holder(stack, capsys):
     code, out, _ = await cli(capsys, "claim", WELLAND, "--purpose", "x")
     assert code == 0 and "UTC" in out and "T" not in out.split("until")[1].split("UTC")[0] and "(started" in out
     code, out, _ = await cli(capsys, "claims")
-    assert "(cli)" in out and "(gone)" not in out
+    assert "(gone)" not in out  # the claims call itself reconnects the same holder
+    assert _presence({"holder": "cli:u@h", "holder_connected": False}) == " (cli)"
+    assert _presence({"holder": "p:1@h", "holder_connected": False}) == " (not connected)"
+    assert _presence({"holder": "p:1@h", "holder_connected": True}) == ""
 
 
 async def test_oserror_is_an_error_line(no_broker, capsys, monkeypatch):
