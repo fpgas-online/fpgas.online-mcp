@@ -18,12 +18,16 @@ Format (all times ISO 8601 UTC, `Z` suffix):
       "tt_state_at_claim": null             # Tiny Tapeout state seen at claim time
     }
 
+Mutations hold an flock on `claims/.lock` (cross-process) and an asyncio lock.
+Naive times in a hand-edited file are read as UTC.
 Expired claims are ignored and their file removed on read. A file that cannot
 be parsed is logged and ignored (never deleted). Whether a holder's front end
 is currently connected is kept in memory only, never in the file.
 """
 
 import asyncio
+import contextlib
+import fcntl
 import json
 import logging
 import os
@@ -34,6 +38,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+from .paths import _private
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +74,8 @@ def _iso(t: datetime) -> str:
 
 
 def _parse(s: str) -> datetime:
-    return datetime.fromisoformat(s).astimezone(UTC)
+    t = datetime.fromisoformat(s)
+    return t.replace(tzinfo=UTC) if t.tzinfo is None else t.astimezone(UTC)
 
 
 def _now() -> datetime:
@@ -81,6 +88,35 @@ class ClaimStore:
         self._clock = clock
         self._lock = asyncio.Lock()
         self._connected: set[str] = set()
+        self._holding = False  # this process holds the flock
+
+    async def _acquire(self):
+        """Take the cross-process flock, polling so the event loop is never blocked."""
+        self._ensure_dir()
+        fd = os.open(self._dir / ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+            except BlockingIOError:
+                await asyncio.sleep(0.01)
+            except BaseException:
+                os.close(fd)
+                raise
+
+    @contextlib.asynccontextmanager
+    async def _locked(self):
+        async with self._lock:
+            fd = await self._acquire()
+            self._holding = True
+            try:
+                yield
+            finally:
+                self._holding = False
+                os.close(fd)  # closing releases the flock
+
+    def _ensure_dir(self) -> None:
+        _private(self._dir, self._dir.parent)
 
     # --- paths and file io -------------------------------------------------
 
@@ -88,8 +124,7 @@ class ClaimStore:
         return self._dir / (re.sub(r"[^A-Za-z0-9._-]", "_", board.replace(":", "_", 1)) + ".json")
 
     def _write(self, claim: Claim) -> None:
-        self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self._dir.chmod(0o700)
+        self._ensure_dir()
         data = {
             "claim_id": claim.claim_id,
             "board": claim.board,
@@ -131,12 +166,25 @@ class ClaimStore:
             log.warning("ignoring unreadable claim file %s: %s", path, e)
             return None
         if claim.expires <= self._clock():
-            try:
-                path.unlink()
-            except OSError:
-                pass  # best effort; it is ignored on every read anyway
+            self._drop_expired(path, claim.claim_id)
             return None
         return replace(claim, holder_connected=claim.holder in self._connected)
+
+    def _drop_expired(self, path: Path, claim_id: str) -> None:
+        """Best-effort unlink, under the flock and only if the file is still that expired claim."""
+        fd = None
+        try:
+            if not self._holding:
+                fd = os.open(self._dir / ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+                fcntl.flock(fd, fcntl.LOCK_EX)  # critical section is tiny
+            d = json.loads(path.read_text())
+            if d.get("claim_id") == claim_id and _parse(d["expires"]) <= self._clock():
+                path.unlink()
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass  # ignored on every read anyway
+        finally:
+            if fd is not None:
+                os.close(fd)
 
     # --- reads -------------------------------------------------------------
 
@@ -171,11 +219,12 @@ class ClaimStore:
         holder: str,
         claim_id: str | None = None,
         override_reason: str | None = None,
+        tt_state_at_claim: str | None = None,
     ) -> Claim:
         minutes = DEFAULT_MINUTES if minutes is None else minutes
         if not 1 <= minutes <= MAX_MINUTES:
             raise ValueError(f"minutes must be between 1 and {MAX_MINUTES}, got {minutes}")
-        async with self._lock:
+        async with self._locked():
             now = self._clock()
             expires = now + timedelta(minutes=minutes)
             if claim_id is not None:
@@ -183,10 +232,16 @@ class ClaimStore:
                 if known is not None and known.board != board:
                     raise ValueError(f"claim {claim_id} is for a different board ({known.board})")
             existing = self.for_board(board)
+            await asyncio.sleep(0)  # yield point: only the locks make check-then-write safe
             if existing is not None:
                 if claim_id != existing.claim_id:
                     raise ClaimConflict(existing)
-                claim = replace(existing, purpose=purpose, expires=expires)
+                claim = replace(
+                    existing,
+                    purpose=purpose,
+                    expires=expires,
+                    tt_state_at_claim=tt_state_at_claim or existing.tt_state_at_claim,
+                )
             else:
                 claim = Claim(
                     claim_id="c-" + secrets.token_urlsafe(9),
@@ -196,13 +251,14 @@ class ClaimStore:
                     started=now,
                     expires=expires,
                     override_reason=override_reason,
+                    tt_state_at_claim=tt_state_at_claim,
                     holder_connected=holder in self._connected,
                 )
             self._write(claim)
             return claim
 
     async def release(self, claim_id: str) -> None:
-        async with self._lock:
+        async with self._locked():
             claim = self.get(claim_id)
             if claim is None:
                 raise KeyError(claim_id)

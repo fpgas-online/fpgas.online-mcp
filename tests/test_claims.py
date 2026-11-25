@@ -160,7 +160,7 @@ async def test_file_format_and_modes(store, tmp_path):
         "override_reason": None,
         "tt_state_at_claim": None,
     }
-    assert [p.name for p in d.iterdir()] == ["welland_sw1-p1.json"]
+    assert sorted(p.name for p in d.iterdir()) == [".lock", "welland_sw1-p1.json"]
 
 
 async def test_concurrent_claims_one_conflict(store):
@@ -190,9 +190,11 @@ async def test_active_count_and_all(store, clock):
     a = await store.claim(BOARD, 30, "x", "a@h")
     await store.claim("ps1:pi1", 5, "y", "b@h")
     assert store.active_count() == 2
-    assert {c.claim_id for c in store.all()} >= {a.claim_id}
+    assert len(store.all()) == 2
+    assert a.claim_id in {c.claim_id for c in store.all()}
     clock.advance(minutes=6)
     assert store.active_count() == 1
+    assert [c.claim_id for c in store.all()] == [a.claim_id]
 
 
 async def test_corrupt_file_ignored_not_deleted(store, tmp_path, caplog):
@@ -207,3 +209,51 @@ async def test_corrupt_file_ignored_not_deleted(store, tmp_path, caplog):
     # a corrupt file does not block claiming... it is replaced by the new claim
     c = await store.claim("ps1:pi1", 30, "z", "a@h")
     assert store.for_board("ps1:pi1") == c
+
+
+async def test_tt_state_at_claim_set_and_kept(store):
+    c = await store.claim(BOARD, 30, "x", "a@h", tt_state_at_claim="idle")
+    assert store.get(c.claim_id).tt_state_at_claim == "idle"
+    r = await store.claim(BOARD, 30, "x", "a@h", claim_id=c.claim_id)
+    assert r.tt_state_at_claim == "idle"
+    r = await store.claim(BOARD, 30, "x", "a@h", claim_id=c.claim_id, tt_state_at_claim="busy")
+    assert store.get(c.claim_id).tt_state_at_claim == "busy"
+
+
+async def test_two_stores_same_dir_one_conflict(tmp_path, clock):
+    a, b = ClaimStore(tmp_path, clock), ClaimStore(tmp_path, clock)
+    results = await asyncio.gather(
+        a.claim(BOARD, 30, "x", "a@h"),
+        b.claim(BOARD, 30, "y", "b@h"),
+        return_exceptions=True,
+    )
+    assert sum(isinstance(r, ClaimConflict) for r in results) == 1
+
+
+async def test_dirs_are_private(tmp_path, clock):
+    state = tmp_path / "new" / "state"
+    await ClaimStore(state, clock).claim(BOARD, 30, "x", "a@h")
+    assert stat.S_IMODE(state.stat().st_mode) == 0o700
+    assert stat.S_IMODE((state / "claims").stat().st_mode) == 0o700
+
+
+async def test_naive_times_read_as_utc(store, tmp_path):
+    c = await store.claim(BOARD, 30, "x", "a@h")
+    f = tmp_path / "claims" / "welland_sw1-p1.json"
+    data = json.loads(f.read_text())
+    data["started"], data["expires"] = "2026-11-26T12:00:00", "2026-11-26T12:30:00"
+    f.write_text(json.dumps(data))
+    got = store.get(c.claim_id)
+    assert got.expires == datetime(2026, 11, 26, 12, 30, tzinfo=UTC)
+
+
+async def test_expiry_does_not_delete_fresh_claim(store, clock, tmp_path):
+    c = await store.claim(BOARD, 30, "x", "a@h")
+    f = tmp_path / "claims" / "welland_sw1-p1.json"
+    clock.advance(minutes=31)
+    # another process replaced the file with a fresh claim after we parsed the old one
+    fresh = json.loads(f.read_text())
+    fresh.update(claim_id="c-fresh", expires="2026-11-26T14:00:00Z")
+    f.write_text(json.dumps(fresh))
+    store._drop_expired(f, c.claim_id)
+    assert f.exists()
