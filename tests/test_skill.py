@@ -68,14 +68,19 @@ def test_references_do_not_chain():
         assert not REFERENCE_LINK.search(path.read_text()), f"{path.name} links to another reference"
 
 
+def shipped_files():
+    """Skill files plus the package sources: both are scanned for forbidden strings."""
+    return skill_files() + [p for p in (ROOT / "src").rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+
+
 def test_no_stderr_discard():
-    for path in skill_files():
+    for path in shipped_files():
         assert "2>/dev/null" not in path.read_text(), path
 
 
 def test_no_operator_paths():
     pattern = re.compile(r"10\.21\.|tweed|:8765")
-    for path in skill_files():
+    for path in shipped_files():
         assert not pattern.search(path.read_text()), path
 
 

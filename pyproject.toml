@@ -1,16 +1,37 @@
 [project]
 name = "fpgas-online-mcp"
-version = "0.0.1"
+dynamic = ["version"]
 description = "Claude Code plugin with a skill for using the boards on fpgas.online"
 license = "Apache-2.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "mcp==2.3.0",
+    "httpx==0.28.1",
+]
+
+[project.scripts]
+fpgas-online-mcp = "fpgas_online_mcp.mcp_server:main"
+fpgas-online-broker = "fpgas_online_mcp.broker:main"
+fpgas-online = "fpgas_online_mcp.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/fpgas_online_mcp/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fpgas_online_mcp"]
 
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "pytest-asyncio>=0.24",
     "ruff>=0.6",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
