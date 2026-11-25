@@ -1,6 +1,6 @@
 # Stage 2 design: a local MCP server shared by the sessions on one machine
 
-Date: 2026-11-25. Status: draft, awaiting approval.
+Date: 2026-11-25. Status: approved by Tim 2026-11-25.
 
 ## Intent
 
@@ -60,8 +60,25 @@ It is for people and agents who use the boards, not for running the infrastructu
   `<switch><2-digit port>22`, ps1 `(100+N)*100+22`. Non-interactive ssh never joins the shared
   tmux; interactive logins must never be opened.
 - Power: `POST /snmp/toggle` (JSON, `Content-Type: application/json`); welland/tinytapeout
-  have a 60 s hold (429 + `Retry-After`); ps1 has no hold and its port mapping is unverified,
-  so ps1 cycles need an explicit user confirmation.
+  have a 60 s hold (429 + `Retry-After`); ps1 has no hold.
+- **Why the ps1 `pi21` cycle did not reboot it** (investigated 2026-11-25, read-only):
+  ps1 runs `snmp_switch` 0.0.17, whose toggle sets the port's PoE off, waits 0.5 s, sets it
+  on, and returns the states the switch echoed back — so `["off","on"]` means the switch
+  accepted both on port 21 (e21, which the site notes give to pi21). pi21 is a Raspberry
+  Pi 5 with no PoE HAT, running from a 5 V USB-C supply without USB-PD (`max_current`
+  900 mA); its undervoltage flag was never set, its Ethernet link never dropped since it
+  booted on 2026-11-17, and its boot id did not change. So e21's PoE does not power pi21:
+  the cycle reached the right port and the host simply does not depend on it. No other
+  reachable ps1 host rebooted at the time (pi3 booted 2026-11-24 00:46, pi20 2026-10-23;
+  pi7 booted 16:09 UTC, well after the test, and is used by another session). Other ps1
+  hosts checked also have no PoE HAT (pi3: Pi 4; pi7: Pi 3B+ with a Pmod HAT adaptor), so a
+  ps1 Reset may be a no-op for them too unless they are fed by a PoE splitter.
+- Consequence: no ps1-specific confirmation. `power_cycle` treats ps1 like the other sites
+  (claim + fresh in-use check), and when the boot id does not change it reports "the switch
+  cycled the port but this host did not lose power: it is probably not powered by PoE, so
+  the site cannot reset it — ask the user to reset it by hand", rather than a generic
+  timeout. The stage 1 skill's "a ps1 toggle may hit another board: ask the user first"
+  text is corrected to match (first task of the plan).
 - The in-use logic and its limits are in `skills/fpgas-online/references/in-use.md`; the
   Tiny Tapeout idle rule (`clients` 0 twice ≥15 s apart and `idle_display.state == loaded`)
   is there too.
@@ -136,7 +153,7 @@ survive port moves where the site gives them: USB serial, board type, FPGA part.
 | `release_board(claim_id)` | Release. | not read-only |
 | `connect(board, claim_id?)` | Ensure an ssh master to the host (needs the caller's claim); returns the alias, the generated config path, and the exact `ssh -F … <alias> 'cmd'` / `scp -F …` lines to use from the shell. | not read-only, not destructive |
 | `run(board, command, claim_id?, timeout_s=60)` | Run one non-interactive command over the master. Requires the caller's claim. Returns exit status and output truncated to 8 KB (head and tail), wrapped as untrusted board output. | not read-only, destructive=false, open-world |
-| `power_cycle(board, claim_id?, confirm_ps1=false)` | Requires the caller's claim and a fresh in-use check (any signal other than the caller's own → refuse). Closes the master, records the boot id (or Tiny Tapeout `uptime_s`), toggles, honours `Retry-After`, waits until the boot id changes and ssh/status answers (cap 5 minutes), and reports timings. On ps1 refuses unless `confirm_ps1=true` and says why. | destructive, not idempotent |
+| `power_cycle(board, claim_id?)` | Requires the caller's claim and a fresh in-use check (any signal other than the caller's own → refuse). Closes the master, records the boot id (or Tiny Tapeout `uptime_s`), toggles, honours `Retry-After`, waits until the boot id changes and ssh/status answers (cap 5 minutes), and reports timings. If the boot id never changes, says the host is probably not PoE-powered (see ps1 above) instead of a bare timeout. | destructive, not idempotent |
 
 Errors are returned as tool results that say what to do next (for example "claimed by
 X until 15:40; ask the user or pick another board").
@@ -210,7 +227,7 @@ for the holder, while a human who arrives during the claim still stops it.
   cache TTL/single-flight/stale, claims (expiry, renew, conflicts, override, disconnected
   holder), broker start-up race (two front ends at once start one broker), version restart
   refusal with claims held, power-cycle wait (boot id unchanged → fail loudly; empty values
-  → not back), ps1 refusal, untrusted-output wrapping and truncation.
+  → not back), not-PoE-powered report, untrusted-output wrapping and truncation.
 - MCP-level tests through an in-memory client: tool list, annotations, error texts.
 - A manual live smoke test script (read-only by default; power-cycle only with a flag and a
   named board), run before merge against welland `pi-sw1-p2` and ps1 `pi21`.
