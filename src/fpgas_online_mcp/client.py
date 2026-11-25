@@ -5,6 +5,7 @@ import contextlib
 import fcntl
 import itertools
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,22 +27,35 @@ class BrokerClient:
         self.holder = holder
         self._ids = itertools.count(1)
         self._lock = asyncio.Lock()
+        self._broken = False
 
     async def call(self, op: str, **args: Any) -> Any:
         async with self._lock:
+            if self._broken:
+                raise BrokerError("disconnected", "the connection to the broker was dropped")
+            req_id = next(self._ids)
             req = {
-                "id": next(self._ids),
+                "id": req_id,
                 "op": op,
                 "args": args,
                 "version": __version__,
                 "holder": self.holder,
             }
-            self._writer.write(encode(req))
-            await self._writer.drain()
-            line = await self._reader.readline()
-            if not line:
-                raise BrokerError("disconnected", "the broker closed the connection")
-            resp = decode(line)
+            try:
+                self._writer.write(encode(req))
+                await self._writer.drain()
+                while True:
+                    line = await self._reader.readline()
+                    if not line:
+                        raise BrokerError("disconnected", "the broker closed the connection")
+                    resp = decode(line)
+                    if resp.get("id") in (req_id, None):
+                        break  # skip replies to earlier abandoned requests
+            except BaseException:
+                # Cancelled or failed mid-call: replies could now pair with the wrong request.
+                self._broken = True
+                self._writer.close()
+                raise
         if resp.get("ok"):
             return resp.get("result")
         err = resp.get("error") or {}
@@ -65,21 +79,26 @@ async def _open(holder: str) -> BrokerClient | None:
     return BrokerClient(reader, writer, holder)
 
 
-def _spawn() -> None:
-    log = open(state_dir() / "broker.log", "ab")  # noqa: SIM115 - inherited by the child
-    try:
-        with open(os.devnull, "rb") as devnull:
-            import subprocess
+# Run by an intermediate process so the broker is reparented to init: the caller keeps no
+# Popen handle (no ResourceWarning) and never gets a zombie when the broker exits.
+_DETACH = (
+    "import os, subprocess, sys\n"
+    "subprocess.Popen([sys.executable, '-m', 'fpgas_online_mcp.broker'],"
+    " stdin=subprocess.DEVNULL, start_new_session=True, cwd='/')\n"
+    "os._exit(0)\n"
+)
 
-            subprocess.Popen(
-                [sys.executable, "-m", "fpgas_online_mcp.broker"],
-                stdin=devnull,
-                stdout=log,
-                stderr=log,
-                start_new_session=True,
-            )
-    finally:
-        log.close()
+
+def _spawn() -> None:
+    with open(state_dir() / "broker.log", "ab") as log:
+        subprocess.run(
+            [sys.executable, "-c", _DETACH],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            cwd="/",
+            check=True,
+        )
 
 
 async def _start(holder: str) -> BrokerClient:

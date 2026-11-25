@@ -161,6 +161,8 @@ async def serve(sock_path: Path, broker: Broker, idle_exit_s: float = 1800) -> N
     finally:
         os.umask(old_umask)
     sock_path.chmod(0o600)
+    st = sock_path.stat()
+    ours = (st.st_dev, st.st_ino)
     idle_since = broker.clock()
     poll = min(idle_exit_s / 4, 1.0)
     try:
@@ -176,8 +178,12 @@ async def serve(sock_path: Path, broker: Broker, idle_exit_s: float = 1800) -> N
         server.close()
         for w in list(writers):
             w.close()
+        # A successor may already have replaced the socket; only remove our own.
+        with contextlib.suppress(FileNotFoundError):
+            now = sock_path.stat()
+            if (now.st_dev, now.st_ino) == ours:
+                sock_path.unlink()
         await server.wait_closed()
-        sock_path.unlink(missing_ok=True)
 
 
 def main() -> None:

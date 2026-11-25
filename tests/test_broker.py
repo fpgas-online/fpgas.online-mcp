@@ -20,17 +20,22 @@ REPO_TMP = Path(__file__).resolve().parent.parent / "tmp"
 
 
 def _raw(sock_path: Path, *lines: dict) -> list[dict]:
-    s = socket.socket(socket.AF_UNIX)
-    s.settimeout(3)
-    s.connect(str(sock_path))
-    f = s.makefile("rwb")
     out = []
-    for line in lines:
-        f.write(json.dumps(line).encode() + b"\n")
-        f.flush()
-        out.append(json.loads(f.readline()))
-    s.close()
+    with socket.socket(socket.AF_UNIX) as s:
+        s.settimeout(3)
+        s.connect(str(sock_path))
+        with s.makefile("rwb") as f:
+            for line in lines:
+                f.write(json.dumps(line).encode() + b"\n")
+                f.flush()
+                out.append(json.loads(f.readline()))
     return out
+
+
+async def _wait_for_sock(sock: Path) -> None:
+    async with asyncio.timeout(5):
+        while not sock.exists():
+            await asyncio.sleep(0.01)
 
 
 @pytest.fixture
@@ -64,8 +69,7 @@ async def running(env):
     sock = paths.runtime_dir() / SOCK_NAME
     broker = Broker()
     task = asyncio.create_task(serve(sock, broker))
-    while not sock.exists():
-        await asyncio.sleep(0.01)
+    await _wait_for_sock(sock)
     yield broker, sock
     broker.stop()
     await task
@@ -129,6 +133,7 @@ async def test_bad_json_keeps_connection(running):
     writer.write(b'{"id": 5, "op": "ping"}\n')
     assert json.loads(await reader.readline())["ok"] is True
     writer.close()
+    await writer.wait_closed()
 
 
 async def test_overlong_line_closes(running):
@@ -139,6 +144,7 @@ async def test_overlong_line_closes(running):
     assert resp["error"]["code"] == "bad_request"
     assert await reader.readline() == b""
     writer.close()
+    await writer.wait_closed()
 
 
 async def test_socket_mode_0600(running):
@@ -166,8 +172,7 @@ async def test_shutdown_if_idle(env):
     sock = paths.runtime_dir() / SOCK_NAME
     claims = [1]
     task = asyncio.create_task(serve(sock, Broker(active_claims=lambda: claims[0])))
-    while not sock.exists():
-        await asyncio.sleep(0.01)
+    await _wait_for_sock(sock)
     c = await client.connect("h", spawn=False)
     with pytest.raises(BrokerError) as e:
         await c.call("shutdown_if_idle")
@@ -203,8 +208,7 @@ async def _old_broker(env, claims):
     broker = Broker(active_claims=lambda: claims)
     broker.version = "0.0.1"
     task = asyncio.create_task(serve(sock, broker))
-    while not sock.exists():
-        await asyncio.sleep(0.01)
+    await _wait_for_sock(sock)
     return task
 
 
@@ -224,3 +228,58 @@ async def test_version_mismatch_refused_with_claims(env):
     assert e.value.code == "version" and "0.0.1" in e.value.message
     assert not old.done()
     old.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await old
+
+
+async def test_shutdown_keeps_successor_socket(env):
+    sock = paths.runtime_dir() / SOCK_NAME
+    broker = Broker()
+    task = asyncio.create_task(serve(sock, broker))
+    await _wait_for_sock(sock)
+    sock.unlink()  # a successor broker B takes over the path
+    successor = socket.socket(socket.AF_UNIX)
+    successor.bind(str(sock))
+    try:
+        broker.stop()
+        await task
+        assert sock.exists()
+    finally:
+        successor.close()
+
+
+async def test_cancelled_call_does_not_desync(running):
+    broker, _ = running
+
+    async def slow(args, conn):
+        await asyncio.sleep(0.3)
+        return "slow"
+
+    broker.register("slow", slow)
+    c = await client.connect("h", spawn=False)
+    t = asyncio.create_task(c.call("slow"))
+    await asyncio.sleep(0.1)
+    t.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await t
+    with pytest.raises(BrokerError) as e:
+        await c.call("ping")
+    assert e.value.code == "disconnected"
+
+
+async def test_stale_reply_is_skipped(env):
+    sock = paths.runtime_dir() / SOCK_NAME
+
+    async def fake(reader, writer):
+        await reader.readline()
+        writer.write(b'{"id":99,"ok":true,"result":"stale"}\n{"id":1,"ok":true,"result":"fresh"}\n')
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_unix_server(fake, path=str(sock))
+    reader, writer = await asyncio.open_unix_connection(str(sock))
+    c = client.BrokerClient(reader, writer, "h")
+    assert await c.call("x") == "fresh"
+    await c.close()
+    server.close()
+    await server.wait_closed()
