@@ -6,7 +6,8 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from test_mcp import REPO_TMP, UNTRUSTED, WELLAND, stack  # noqa: F401  (fixture)
+from test_mcp import REPO_TMP, UNTRUSTED, WELLAND
+from test_mcp import stack as stack  # noqa: F401  (fixture)
 
 import fpgas_online_mcp
 from fpgas_online_mcp.cli import main
