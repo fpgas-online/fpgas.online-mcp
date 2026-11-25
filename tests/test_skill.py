@@ -79,7 +79,7 @@ def test_no_stderr_discard():
 
 
 def test_no_operator_paths():
-    pattern = re.compile(r"10\.21\.|tweed|:8765")
+    pattern = re.compile(r"10\.21\.|10\.99\.|tweed|:8765")
     for path in shipped_files():
         assert not pattern.search(path.read_text()), path
 
