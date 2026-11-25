@@ -109,7 +109,9 @@ async def stack(monkeypatch):
     async with asyncio.timeout(5):
         while not sock.exists():
             await asyncio.sleep(0.01)
-    yield Stack(state, inuse, power, site)
+    st = Stack(state, inuse, power, site)
+    st.broker = broker
+    yield st
     broker.stop()
     await task
     await http.aclose()

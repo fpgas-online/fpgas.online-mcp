@@ -9,6 +9,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
+from . import __version__
 from .client import BrokerClient, BrokerError, connect
 
 __all__ = ["main", "run"]
@@ -29,10 +30,26 @@ def hhmm(iso: str | None) -> str:
     return t.astimezone(UTC).strftime("%H:%M")
 
 
+def when(iso: str) -> str:
+    """'HH:MM UTC', with the ISO date added when it is not today (UTC)."""
+    try:
+        t = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return iso
+    day = "" if t.date() == datetime.now(UTC).date() else f"{t.date().isoformat()} "
+    return f"{day}{t:%H:%M} UTC"
+
+
 def table(headers: list[str], rows: list[list[str]]) -> str:
     cells = [headers, *rows]
     widths = [max(len(r[i]) for r in cells) for i in range(len(headers))]
     return "\n".join("  ".join(c.ljust(w) for c, w in zip(r, widths, strict=True)).rstrip() for r in cells)
+
+
+def _presence(c: dict) -> str:
+    if c.get("holder_connected"):
+        return ""
+    return " (cli)" if str(c.get("holder", "")).startswith("cli:") else " (not connected)"
 
 
 def _claim_text(c: dict) -> str:
@@ -95,7 +112,7 @@ def fmt_claims(r: dict) -> str:
         [
             c["board"],
             c["claim_id"],
-            c["holder"] + ("" if c.get("holder_connected") else " (gone)"),
+            c["holder"] + _presence(c),
             f"{hhmm(c['expires'])} UTC",
             c["purpose"],
         ]
@@ -107,7 +124,7 @@ def fmt_claims(r: dict) -> str:
 def fmt_claim(r: dict) -> str:
     lines = [
         f"CLAIM ID: {r['claim_id']}",
-        f"{r['board']} is yours until {r['expires']} (started {r['started']}); purpose: {r['purpose']}",
+        f"{r['board']} is yours until {when(r['expires'])} (started {when(r['started'])}); purpose: {r['purpose']}",
     ]
     if r.get("override_reason"):
         lines.append(f"override: {r['override_reason']}")
@@ -137,7 +154,9 @@ async def _broker_op(args: argparse.Namespace) -> tuple[Any, Any]:
             case "claims":
                 return await c.call("claims"), fmt_claims
             case "claim":
-                kw = {"board": args.board, "minutes": args.minutes, "purpose": args.purpose}
+                kw = {"board": args.board, "purpose": args.purpose}
+                if args.minutes is not None:
+                    kw["minutes"] = args.minutes
                 if args.override_reason:
                     kw["override_reason"] = args.override_reason
                 return await c.call("claim_board", **kw), fmt_claim
@@ -160,6 +179,10 @@ async def _broker_cmd(args: argparse.Namespace) -> tuple[Any, str | None, int]:
         if args.action == "status":
             info = await c.call("ping")
             text = f"running: version {info['version']}, pid {info['pid']}, started {info['started']}"
+            if info["version"] != __version__:
+                text += (
+                    f"\nthis CLI is version {__version__}: the next board command replaces the broker once it is idle"
+                )
             return info, text, 0
         try:
             result = await c.call("shutdown_if_idle")
@@ -167,9 +190,12 @@ async def _broker_cmd(args: argparse.Namespace) -> tuple[Any, str | None, int]:
             if e.code != "busy":
                 raise
             claims = (await c.call("claims"))["claims"]
-            text = "not stopped: the broker is busy; claims held:\n" + fmt_claims({"claims": claims})
+            held = sorted({c["holder"] for c in claims})
+            text = f"not stopped: the broker is busy; claim holders: {', '.join(held)}\n" + fmt_claims(
+                {"claims": claims}
+            )
             return {"stopping": False, "claims": claims}, text, 1
-        return result, "broker stopping", 0
+        return result, "stopped", 0
     finally:
         await c.close()
 
@@ -188,7 +214,7 @@ def _parser() -> argparse.ArgumentParser:
     add("claims", "list live claims")
     sp = add("claim", "claim a board")
     sp.add_argument("board")
-    sp.add_argument("--minutes", type=int, default=30, help="1-240 (default 30)")
+    sp.add_argument("--minutes", type=int, help="1-240 (the broker defaults to 30)")
     sp.add_argument("--purpose", required=True)
     sp.add_argument("--override-reason", help="claim although the in-use check says busy (ask the user first)")
     add("release", "release a claim").add_argument("claim_id")
@@ -205,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result, fmt = asyncio.run(_broker_op(args))
             text, code = fmt(result), 0
-    except BrokerError as e:
+    except (BrokerError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(json.dumps(result, indent=2) if args.json else text)

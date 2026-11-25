@@ -28,6 +28,7 @@ class BrokerClient:
         self._ids = itertools.count(1)
         self._lock = asyncio.Lock()
         self._broken = False
+        self.broker_version: str | None = None  # set by connect()
 
     @property
     def broken(self) -> bool:
@@ -145,15 +146,19 @@ async def _wait_gone() -> None:
 
 
 async def connect(holder: str, spawn: bool = True) -> BrokerClient:
-    """Connect to the broker, starting it if needed and replacing one of a different version."""
+    """Connect to the broker, starting it if needed and replacing one of a different version.
+
+    With spawn=False nothing is started or stopped; `client.broker_version` says what is running.
+    """
     client = await _open(holder)
     if client is None:
         if not spawn:
             raise BrokerError("not_running", "the broker is not running")
         client = await _start(holder)
     info = await client.call("ping")
-    if info["version"] == __version__:
-        return client
+    client.broker_version = info["version"]
+    if info["version"] == __version__ or not spawn:
+        return client  # without spawn a client never shuts a broker down (the CLI inspects/stops it)
     old = info["version"]
     try:
         await client.call("shutdown_if_idle")
@@ -168,6 +173,4 @@ async def connect(holder: str, spawn: bool = True) -> BrokerClient:
         ) from e
     await client.close()
     await _wait_gone()
-    if not spawn:
-        raise BrokerError("not_running", f"the old broker {old} stopped; none is running now")
     return await _start(holder)

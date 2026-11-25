@@ -86,7 +86,7 @@ async def test_broker_status_and_stop_idle(stack, capsys):
     code, out, _ = await cli(capsys, "broker", "status", "--json")
     assert json.loads(out)["version"] == fpgas_online_mcp.__version__
     code, out, _ = await cli(capsys, "broker", "stop")
-    assert code == 0 and "stopping" in out
+    assert code == 0 and out.strip() == "stopped"
 
 
 async def test_broker_stop_busy(stack, capsys):
@@ -123,3 +123,35 @@ def test_bad_usage_exits_2(capsys):
     with pytest.raises(SystemExit) as e:
         main(["claim", WELLAND])  # --purpose is required
     assert e.value.code == 2
+
+
+async def test_broker_version_mismatch(stack, capsys):
+    stack.broker.version = "0.0.1"
+    code, out, _ = await cli(capsys, "broker", "status")
+    assert code == 0 and "version 0.0.1" in out and f"this CLI is version {fpgas_online_mcp.__version__}" in out
+    code, out, _ = await cli(capsys, "broker", "status")  # status did not stop it
+    assert code == 0 and "running" in out
+    code, out, _ = await cli(capsys, "broker", "stop")
+    assert code == 0 and out.strip() == "stopped"
+
+
+async def test_minutes_out_of_range(stack, capsys):
+    for bad in ("0", "241"):
+        code, out, err = await cli(capsys, "claim", WELLAND, "--purpose", "x", "--minutes", bad)
+        assert code == 1 and out == "" and err.startswith("error: ") and "Traceback" not in err
+
+
+async def test_claim_default_minutes_and_cli_holder(stack, capsys):
+    code, out, _ = await cli(capsys, "claim", WELLAND, "--purpose", "x")
+    assert code == 0 and "UTC" in out and "T" not in out.split("until")[1].split("UTC")[0] and "(started" in out
+    code, out, _ = await cli(capsys, "claims")
+    assert "(cli)" in out and "(gone)" not in out
+
+
+async def test_oserror_is_an_error_line(no_broker, capsys, monkeypatch):
+    async def boom(*a, **k):
+        raise OSError("cannot spawn")
+
+    monkeypatch.setattr("fpgas_online_mcp.cli.connect", boom)
+    code, out, err = await cli(capsys, "boards")
+    assert code == 1 and out == "" and err == "error: cannot spawn\n"
