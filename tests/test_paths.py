@@ -80,5 +80,5 @@ def test_socket_path_short(monkeypatch):
 def test_version_matches_package_metadata():
     from importlib.metadata import version
 
-    assert fpgas_online_mcp.__version__ == "0.1.0"
+    assert fpgas_online_mcp.__version__ == "0.1.1"
     assert version("fpgas-online-mcp") == fpgas_online_mcp.__version__

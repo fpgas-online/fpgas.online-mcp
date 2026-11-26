@@ -37,6 +37,14 @@ async def test_boards_condition(stack, capsys):
     assert WELLAND not in out  # pi-sw1-p2 is operational in the fixture
 
 
+def test_fmt_boards_old_format_is_an_error():
+    from fpgas_online_mcp.cli import fmt_boards
+    from fpgas_online_mcp.client import BrokerError
+
+    with pytest.raises(BrokerError, match="older format"):
+        fmt_boards({"sites": {}, "boards": [{"id": "welland:pi-sw1-p2"}]})
+
+
 async def test_boards_json(stack, capsys):
     code, out, _ = await cli(capsys, "boards", "--site", "welland", "--json")
     data = json.loads(out)

@@ -61,6 +61,10 @@ def _claim_text(c: dict) -> str:
 
 
 def fmt_boards(r: dict) -> str:
+    if "columns" not in r:
+        raise BrokerError(
+            "version", "the broker answered list_boards in an older format; run `fpgas-online broker stop`"
+        )
     rows = []
     claims = r.get("claims", {})
     for row in r["boards"]:

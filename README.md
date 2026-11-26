@@ -13,7 +13,7 @@ or administering the fpgas.online infrastructure.
 
 Stage 1 (the skill, `skills/fpgas-online/`) and stage 2 (the local MCP server
 `fpgas-online-mcp`, a shared broker process and the `fpgas-online` CLI) are
-written. Version 0.1.0. A hosted endpoint (stage 3) is not started.
+written. Version 0.1.1. A hosted endpoint (stage 3) is not started.
 
 ## Install
 
@@ -85,7 +85,8 @@ fpgas-online broker status|stop
 
 Add `--json` for the raw result. Run it with `uvx --from git+https://github.com/fpgas-online/fpgas.online-mcp@v0.1 fpgas-online ...`
 or `uv run fpgas-online ...` in a checkout. `fpgas-online broker stop` stops
-the broker unless claims are live (it says who holds them).
+the broker unless claims are live (it says who holds them) or another session
+is connected to it.
 
 ## Where state lives
 
