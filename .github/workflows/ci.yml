@@ -39,6 +39,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.4.0
         with:
           python-version: "3.12"
+          enable-cache: false # the job that can publish never restores a cache
       - run: uv build
       - run: uv run --no-project python scripts/check_dist.py dist
       # Each push publishes its own version, so parallel runs never collide; --check-url skips files
