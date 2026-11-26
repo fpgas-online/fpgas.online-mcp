@@ -1,4 +1,4 @@
-name: Test
+name: CI
 
 on:
   push:
@@ -9,10 +9,39 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # Full history and tags: the version comes from `git describe` (build_version.py).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
       - run: uv sync
       - run: uv run ruff check .
       - run: uv run pytest -v
+      - run: uv build
+      - name: Check the built version
+        run: uv run --no-project python scripts/check_dist.py dist
+
+  # Every push to main is published to PyPI as <X>.<Y>.<commits since the v<X>.<Y> tag>.
+  publish:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # PyPI trusted publishing; no API token is stored anywhere
+      contents: read
+    concurrency:
+      group: pypi-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv build
+      - run: uv run --no-project python scripts/check_dist.py dist
+      - run: uv publish --trusted-publishing always
