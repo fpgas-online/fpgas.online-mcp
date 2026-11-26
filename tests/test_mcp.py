@@ -354,6 +354,27 @@ async def test_renewal_of_a_claim_that_ends_meanwhile_is_refused(stack, monkeypa
         assert store.for_board(WELLAND) is None and len(stack.inuse.calls) == 1
 
 
+async def test_cancelled_claim_creates_no_claim(stack):
+    gate, started = asyncio.Event(), asyncio.Event()
+
+    async def slow_check(board, ssh, sites, claim, **kw):
+        started.set()
+        await gate.wait()
+        return Verdict("idle", [], "x")
+
+    stack.state.inuse_check = slow_check
+    c = await client.connect("me:1@host", spawn=False)
+    t = asyncio.create_task(c.call("claim_board", board=WELLAND, purpose="cancelled"))
+    await asyncio.wait_for(started.wait(), 5)
+    t.cancel()  # Esc during a long check: the client closes its connection
+    with pytest.raises(asyncio.CancelledError):
+        await t
+    await asyncio.sleep(0.1)
+    gate.set()
+    await asyncio.sleep(0.2)
+    assert stack.state.claims.for_board(WELLAND) is None
+
+
 async def test_tinytapeout_claim_records_state(stack):
     status = {"reachable": True, "kind": "fpga", "clients": 0, "idle_display": {"state": "loaded"}}
     stack.site.override[("tinytapeout.fpgas.online", "/board/fpga-2/status.json")] = httpx.Response(200, json=status)

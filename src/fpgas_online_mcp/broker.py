@@ -23,9 +23,14 @@ log = logging.getLogger("fpgas_online_mcp.broker")
 
 @dataclass(eq=False)
 class Conn:
-    """One connected client. `holder` is set by the first request that carries one."""
+    """One connected client. `holder` is set by the first request that carries one.
+
+    `closed()` is true once the client has hung up (EOF seen): a client that cancels a call closes
+    its connection, so a long handler can check this before it commits anything.
+    """
 
     holder: str | None = None
+    closed: Callable[[], bool] = lambda: False
 
 
 Handler = Callable[[dict, Conn], Awaitable[Any]]
@@ -115,7 +120,7 @@ async def _serve_conn(
     if _peer_uid(writer) != os.getuid():
         writer.close()
         return
-    conn = Conn()
+    conn = Conn(closed=reader.at_eof)
     writers.add(writer)
     broker.conns.add(conn)
     if broker.on_connect:

@@ -347,6 +347,9 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
             )
         if board.site == "tinytapeout":
             tt_state = await _tt_state(state, board)
+    if conn.closed():  # the caller gave up during the check: a claim now would be one it never learns of
+        log.info("not claiming %s: the client hung up during the in-use check", board.id)
+        raise BrokerError("cancelled", "the claim call was cancelled; nothing was claimed")
     try:
         claim = await state.claims.claim(
             str(board.id),
