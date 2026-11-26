@@ -432,3 +432,104 @@ async def test_tt_holder_discount_needs_loaded_at_claim_and_does_not_cover_clien
     assert v.verdict == "in use"
     v, _, _ = await run_tt(tt("waiting", clients=2), c=ttc("loaded"))
     assert v.verdict == "in use"
+
+
+# --- a welland Pi that carries a Tiny Tapeout board ----------------------------------------------
+
+PI_TT = board("welland", "pi-sw2-p7", "TT chip")
+SERIAL = "de641070db746f27"
+
+
+def chip_status(serial=SERIAL, clients=0):
+    return {
+        "reachable": True,
+        "kind": "other",
+        "board": {"present": True, "usb_serial": serial, "chip": "asic"},
+        "clients": clients,
+        "idle_display": {"state": "not an fpga board"},
+    }
+
+
+class PiSites:
+    """welland registry plus the Tiny Tapeout catalogue and status.json (live reads counted)."""
+
+    def __init__(self, statuses, registry_id=SERIAL, slug_exc=None):
+        self.statuses, self.live_reads, self.slug_exc = statuses, [], slug_exc
+        self.registry = [
+            {"hostname": "pi-sw2-p7", "condition": "operational", "boards": [{"type": "TT chip", "id": registry_id}]}
+        ]
+
+    async def welland_registry(self, live=False):
+        assert live
+        return self.registry, Entry(b"", NOW, False)
+
+    async def tt_slugs(self, live=False):
+        if self.slug_exc:
+            raise self.slug_exc
+        return list(self.statuses), Entry(b"", NOW, False)
+
+    async def tt_status(self, slug, live=False):
+        if live:
+            self.live_reads.append(slug)
+        return self.statuses[slug], Entry(b"", NOW, False)
+
+
+async def run_pi(sites, ssh=None, b=PI_TT):
+    ft = FakeTime()
+    ssh = ssh or FakeSsh(script_out("idle"))
+    return await inuse.check(b, ssh, sites, None, clock=ft, sleep=ft.sleep, now=lambda: NOW), ssh
+
+
+async def test_pi_with_a_listed_tt_board_combines_both_checks():
+    sites = PiSites({"tt09": {"reachable": False}, "tt-de641070db746f27": chip_status()})
+    v, ssh = await run_pi(sites)
+    assert v.verdict == "idle" and sites.live_reads == ["tt-de641070db746f27"] * 2
+    assert ssh.calls[0][0] == PI_TT.id and ssh.via is None
+    sites = PiSites({"tt-de641070db746f27": chip_status(clients=1)})
+    v, _ = await run_pi(sites)
+    assert v.verdict == "in use"
+    assert v.signals == [
+        "carries the Tiny Tapeout board tinytapeout:tt-de641070db746f27",
+        "1 serial client(s) connected",
+    ]
+
+
+async def test_pi_with_a_tt_board_someone_uses_over_ssh_is_in_use():
+    ssh = FakeSsh(script_out("in use", "active: tmux client, 12 s ago"))
+    v, _ = await run_pi(PiSites({"tt-de641070db746f27": chip_status()}), ssh)
+    assert v.verdict == "in use" and "board says: tmux client, 12 s ago" in v.signals
+
+
+@pytest.mark.parametrize("registry_id", ["0000000000000000", None])
+async def test_pi_with_an_unlisted_tt_board_has_the_ssh_verdict_and_says_so(registry_id):
+    sites = PiSites({"tt-de641070db746f27": chip_status()}, registry_id=registry_id)
+    v, _ = await run_pi(sites)
+    assert v.verdict == "idle" and v.signals == [inuse.TT_NOT_LISTED] and sites.live_reads == []
+
+
+async def test_pi_whose_tt_catalogue_cannot_be_read_is_unknown():
+    sites = PiSites({}, slug_exc=SiteError("tinytapeout: cannot reach the site (ConnectError)"))
+    v, _ = await run_pi(sites)
+    assert v.verdict == "unknown" and "tinytapeout" in v.signals[0]
+    sites = PiSites({"tt09": {"reachable": False}, "fpga-2": None})  # fpga-2: status unreadable
+
+    async def broken(slug, live=False):
+        if slug == "fpga-2":
+            raise SiteError("tinytapeout: HTTP 500 for /board/fpga-2/status.json", status=500)
+        return sites.statuses[slug], Entry(b"", NOW, False)
+
+    sites.tt_status = broken
+    v, _ = await run_pi(sites)
+    assert v.verdict == "unknown" and "could not read" in v.signals[0]
+
+
+async def test_pi_without_a_tt_board_reads_neither_registry_nor_tt_site():
+    v, _ = await run_pi(None, b=board("welland", "pi-sw1-p2", "Fomu"))  # sites=None: any read would fail
+    assert v.verdict == "idle" and v.signals == []
+
+
+async def test_pi_whose_live_registry_shows_no_tt_board_now_has_the_ssh_verdict():
+    sites = PiSites({"tt-de641070db746f27": chip_status()})
+    sites.registry[0]["boards"] = [{"type": "Fomu", "id": None}]  # the TT board was moved meanwhile
+    v, _ = await run_pi(sites)
+    assert v.verdict == "idle" and v.signals == [] and sites.live_reads == []

@@ -142,15 +142,20 @@ def _rank(machine: dict) -> tuple:
     return (machine.get("condition") != "missing", str(machine.get("last_seen") or ""))
 
 
-async def _welland(sites: SiteClient) -> list[Board]:
-    machines, entry = await sites.welland_registry()
+def _chosen(machines: list[dict]) -> dict[str, dict]:
+    """One registry entry per hostname (see _rank)."""
     chosen: dict[str, dict] = {}
     for m in machines:
         name = m.get("hostname")
         if isinstance(name, str) and name and (name not in chosen or _rank(m) > _rank(chosen[name])):
             chosen[name] = m
+    return chosen
+
+
+async def _welland(sites: SiteClient) -> list[Board]:
+    machines, entry = await sites.welland_registry()
     boards = []
-    for name, m in chosen.items():
+    for name, m in _chosen(machines).items():
         types = [b["type"] for b in m.get("boards") or [] if isinstance(b, dict) and b.get("type")]
         network = m.get("network") or {}
         boot_id = network.get("boot_id") if network.get("current_boot") is True else None
@@ -205,6 +210,29 @@ async def _tt_board(sites: SiteClient, slug: str, cat: Entry) -> Board:
 async def _tinytapeout(sites: SiteClient) -> list[Board]:
     slugs, cat = await sites.tt_slugs()
     return list(await asyncio.gather(*(_tt_board(sites, s, cat) for s in slugs)))
+
+
+async def tt_serials_on(sites: SiteClient, name: str) -> list[str | None]:
+    """The ids (USB serials) of the Tiny Tapeout boards (type "TT ...") the live welland registry puts on
+    Pi `name`; [] when it carries none. An id is None when the Pi did not report one."""
+    machines, _ = await sites.welland_registry(live=True)
+    entry = _chosen(machines).get(name) or {}
+    return [
+        b.get("id")
+        for b in entry.get("boards") or []
+        if isinstance(b, dict) and str(b.get("type") or "").startswith("TT")
+    ]
+
+
+async def tt_board_with_serial(sites: SiteClient, serials: list[str | None]) -> Board | None:
+    """The Tiny Tapeout site's board whose USB serial is one of `serials`, or None when the site lists
+    none of them. SiteError when the catalogue, or the status of a board that could be the one, cannot
+    be read: "not listed" must not be said of a board the site could not show."""
+    boards = await _tinytapeout(sites)
+    found = next((b for b in boards if b.usb_serial and b.usb_serial in serials), None)
+    if found is None and any(b.condition == "unknown" for b in boards):
+        raise SiteError("tinytapeout: could not read every board's status.json, so cannot tell which is on this Pi")
+    return found
 
 
 _LOADERS = {"welland": _welland, "ps1": _ps1, "tinytapeout": _tinytapeout}

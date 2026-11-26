@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from importlib import resources
 from typing import Literal
 
-from .boards import Board, BoardId, tt_host
+from .boards import Board, BoardId, tt_board_with_serial, tt_host, tt_serials_on
 from .claims import Claim
 from .ssh import defuse
 
@@ -32,6 +32,7 @@ TT_MAX_READS = 10
 TT_MAX_WAITING_READS = 3  # the first read plus two re-reads
 
 MAX_OTHER_CONNECTIONS = 5
+TT_NOT_LISTED = "carries a Tiny Tapeout board the Tiny Tapeout site does not list"
 TRUNCATED = "in-use output was truncated"
 
 _ACTIVE = re.compile(r"^active: (.*)$")
@@ -315,6 +316,36 @@ async def _check_tt_board(board: Board, ssh, sites, claim: Claim | None, clock, 
     return _combine(site_verdict, ssh_verdict)
 
 
+def _carries_tt(board: Board) -> bool:
+    """A welland Pi whose registry boards include a Tiny Tapeout one (type "TT ...")."""
+    return board.site == "welland" and any(t.strip().startswith("TT") for t in (board.type or "").split(","))
+
+
+async def _tt_rule_of_pi(board: Board, sites, clock, sleep, now) -> Verdict:
+    """The site rule of the Tiny Tapeout board plugged into welland Pi `board`. When the live registry
+    shows no such board now, or the Tiny Tapeout site lists none with its USB serial, an `idle` that
+    leaves the ssh verdict alone (with a signal for the unlisted board). No claim discount: a claim on
+    the Pi is not one on the Tiny Tapeout board."""
+    serials = await tt_serials_on(sites, board.name)
+    if not serials:
+        return _verdict("idle", [])
+    tt_board = await tt_board_with_serial(sites, serials)
+    if tt_board is None:
+        return _verdict("idle", [TT_NOT_LISTED])
+    v = await _tt_site_rule(tt_board, sites, None, clock, sleep, now)
+    return _verdict(v.verdict, [f"carries the Tiny Tapeout board {tt_board.id}", *v.signals])
+
+
+async def _check_pi_with_tt(board: Board, ssh, sites, claim: Claim | None, clock, sleep, now) -> Verdict:
+    """A welland Pi that carries a Tiny Tapeout board: its ssh script and that board's site rule, so a
+    web visitor on the Tiny Tapeout page blocks a claim on the Pi too."""
+    site_verdict, ssh_verdict = await asyncio.gather(
+        _safe(_tt_rule_of_pi(board, sites, clock, sleep, now)),
+        _safe(_check_ssh(board, ssh, claim, now)),
+    )
+    return _combine(site_verdict, ssh_verdict)
+
+
 async def check(
     board: Board,
     ssh,
@@ -328,6 +359,8 @@ async def check(
     try:
         if board.site == "tinytapeout":
             return await _check_tt_board(board, ssh, sites, claim, clock, sleep, now)
+        if _carries_tt(board):
+            return await _check_pi_with_tt(board, ssh, sites, claim, clock, sleep, now)
         return await _check_ssh(board, ssh, claim, now)
     except Exception as exc:
         return _failed(exc)
