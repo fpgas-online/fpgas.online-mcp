@@ -36,11 +36,11 @@ Claude Code cloud sessions and other repositories: add the MCP server to the
 repository's `.mcp.json` (also needs `uv`):
 
 ```json
-{"mcpServers": {"fpgas-online": {"command": "uvx", "args": ["--from", "git+https://github.com/fpgas-online/fpgas.online-mcp@v0.1", "fpgas-online-mcp"]}}}
+{"mcpServers": {"fpgas-online": {"command": "uvx", "args": ["--from", "git+https://github.com/fpgas-online/fpgas.online-mcp", "fpgas-online-mcp"]}}}
 ```
 
-The `v0.1` tag is created by a human at release time and does not exist yet;
-until then use `@main` (or a commit id). For the skill alone (no MCP), copy
+This always runs the current `main` branch; there are no release tags or
+pinned versions to track. For the skill alone (no MCP), copy
 `skills/fpgas-online` to `.claude/skills/fpgas-online/`.
 
 claude.ai: zip the `skills/fpgas-online` folder and upload the zip under
@@ -83,7 +83,7 @@ fpgas-online release CLAIM_ID
 fpgas-online broker status|stop
 ```
 
-Add `--json` for the raw result. Run it with `uvx --from git+https://github.com/fpgas-online/fpgas.online-mcp@v0.1 fpgas-online ...`
+Add `--json` for the raw result. Run it with `uvx --from git+https://github.com/fpgas-online/fpgas.online-mcp fpgas-online ...`
 or `uv run fpgas-online ...` in a checkout. `fpgas-online broker stop` stops
 the broker unless claims are live (it says who holds them) or another session
 is connected to it.

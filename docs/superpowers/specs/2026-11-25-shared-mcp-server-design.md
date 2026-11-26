@@ -213,9 +213,9 @@ for the holder, while a human who arrives during the claim still stops it.
   plugin directory (`uv run --project ${CLAUDE_PLUGIN_ROOT} --no-dev --frozen
   fpgas-online-mcp`: no dev tools, no re-lock), so installing the plugin installs the server.
 - For cloud sessions (or any repo), the README gives a repo-level `.mcp.json` entry that
-  runs a tagged release straight from GitHub:
-  `uvx --from git+https://github.com/fpgas-online/fpgas.online-mcp@vX.Y fpgas-online-mcp`.
-  No PyPI release in this stage.
+  runs the `main` branch straight from GitHub (no release tags or pinned versions):
+  `uvx --from git+https://github.com/fpgas-online/fpgas.online-mcp fpgas-online-mcp`.
+  No PyPI release.
 - Sessions on big-storage are not sandboxed (checked 2026-11-25), so their shells can use
   the broker socket and the ssh ControlPath sockets. The README notes that a sandboxed
   session must allow `$XDG_RUNTIME_DIR/fpgas-online/` for the CLI and shared ssh to work.
