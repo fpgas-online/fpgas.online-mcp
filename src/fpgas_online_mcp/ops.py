@@ -20,7 +20,17 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from . import guide, inuse, power
-from .boards import Board, BoardId, host_changed, inventory, switch_port, tt_host
+from .boards import (
+    Board,
+    BoardId,
+    carries_tt,
+    host_changed,
+    inventory,
+    switch_port,
+    tt_board_with_serial,
+    tt_host,
+    tt_serials_on,
+)
 from .broker import Broker, Conn
 from .claims import Claim, ClaimConflict, ClaimGone, ClaimStore
 from .paths import PathTooLong
@@ -466,6 +476,38 @@ async def op_release_board(state: State, args: dict, conn: Conn) -> dict:
     return {"released": claim_id, "as_of": _now()}
 
 
+async def _tt_board_of_pi(state: State, board: Board) -> str | None:
+    """The id of the Tiny Tapeout board on welland Pi `board`, if the sites can say which."""
+    try:
+        serials = [s for s in await tt_serials_on(state.sites, board.name) if s]
+        if not serials:
+            return None
+        found = await tt_board_with_serial(state.sites, serials) or await tt_board_with_serial(
+            state.sites, serials, live=True
+        )
+    except SiteError:
+        return None
+    return str(found.id) if found else None
+
+
+async def _unlisted_pi(state: State, board: Board, e: Exception) -> BrokerError | None:
+    """A welland Pi whose own page is a 404 because it carries only a Tiny Tapeout board: say to use the
+    board instead (its claim also holds this Pi and finds the password), else None."""
+    if not (isinstance(e, SiteError) and e.status == 404 and carries_tt(board)):
+        return None
+    slug = await _tt_board_of_pi(state, board)
+    instead = (
+        f"claim and connect {slug} instead"
+        if slug
+        else ("claim and connect that board instead (find it with list_boards site tinytapeout)")
+    )
+    return BrokerError(
+        "use_tt_board",
+        f"ssh to {board.id} failed: welland does not list this Pi (its page is a 404); this Pi is reached "
+        f"through its Tiny Tapeout board: {instead}",
+    )
+
+
 def _ssh_error(board: Board, e: Exception, next_step: str) -> BrokerError:
     """ssh's own text can carry a host's pre-auth banner: log it all, show at most 1 KB of it wrapped."""
     detail = str(e)
@@ -487,7 +529,9 @@ async def op_connect(state: State, args: dict, conn: Conn) -> dict:
     except ValueError as e:
         raise BrokerError("no_ssh", f"{e}; use board_status and the guide topic tinytapeout") from e
     except (RuntimeError, SiteError) as e:
-        raise _ssh_error(board, e, "check board_status and retry later, or pick another board") from e
+        raise await _unlisted_pi(state, board, e) or _ssh_error(
+            board, e, "check board_status and retry later, or pick another board"
+        ) from e
     result = {"board": str(board.id)}
     if via is not None:
         result["host"] = str(host)
@@ -532,7 +576,7 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
     except ValueError as e:
         raise BrokerError("no_ssh", str(e)) from e
     except (RuntimeError, SiteError) as e:
-        raise _ssh_error(board, e, "check board_status and retry later") from e
+        raise await _unlisted_pi(state, board, e) or _ssh_error(board, e, "check board_status and retry later") from e
     budget = RUN_LIMIT - RUN_HEADER_RESERVE - len(wrap_untrusted("").encode())
     output, cut = _fit_bytes(defuse(r.output), budget)
     result = {"board": str(board.id)}

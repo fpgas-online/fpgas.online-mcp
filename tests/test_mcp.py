@@ -813,3 +813,25 @@ async def test_tinytapeout_claim_with_an_unreadable_board_page_is_refused(stack)
         text = err(await call(c, "claim_board", board=TT, purpose="x"))
         assert "cannot read the board page" in text and "try again in a minute" in text
     assert stack.state.claims.for_board(TT) is None and stack.inuse.calls == []
+
+
+async def test_ssh_to_a_pi_welland_does_not_list_points_to_its_tinytapeout_board(stack):
+    async with stack.session() as c:
+        ok(await call(c, "claim_board", board=TT_PI, purpose="x"))  # carries TT_CHIP; its page is a 404
+        for name, args in (("connect", {}), ("run", {"command": "true"})):
+            text = err(await call(c, name, board=TT_PI, **args))
+            assert f"this Pi is reached through its Tiny Tapeout board: claim and connect {TT_CHIP} instead" in text
+
+
+async def test_ssh_to_such_a_pi_without_a_listed_board_points_to_list_boards(stack):
+    registry = json.loads((HERE / "fixtures" / "welland_registry.json").read_text())
+    for m in registry["machines"]:
+        for b in m.get("boards") or []:
+            if b.get("id") == "ab2a48a7ee008dd9":
+                b["id"] = "ffffffffffffffff"
+    stack.site.override[("welland.fpgas.online", "/fleet/registry.json")] = httpx.Response(200, json=registry)
+    async with stack.session() as c:
+        ok(await call(c, "claim_board", board=TT_PI, purpose="x"))
+        text = err(await call(c, "connect", board=TT_PI))
+        assert "this Pi is reached through its Tiny Tapeout board" in text and "list_boards" in text
+        assert "site tinytapeout" in text

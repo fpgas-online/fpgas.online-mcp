@@ -102,6 +102,11 @@ def tt_host_of(page: BoardPage) -> BoardId | None:
     return None if sp is None else BoardId(TT_HOST_SITE, f"pi-sw{sp[0]}-p{sp[1]}")
 
 
+def carries_tt(board: "Board") -> bool:
+    """A welland Pi whose registry boards include a Tiny Tapeout one (type "TT ...")."""
+    return board.site == "welland" and any(t.strip().startswith("TT") for t in (board.type or "").split(","))
+
+
 def host_changed(board: BoardId, live: BoardId, held: str | None) -> str:
     """Why a Tiny Tapeout claim no longer covers its board: the board is on another Pi than the claim holds.
 

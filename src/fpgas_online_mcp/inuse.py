@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from importlib import resources
 from typing import Literal
 
-from .boards import Board, BoardId, tt_board_with_serial, tt_host, tt_serials_on
+from .boards import Board, BoardId, carries_tt, tt_board_with_serial, tt_host, tt_serials_on
 from .claims import Claim
 from .ssh import defuse
 
@@ -317,11 +317,6 @@ async def _check_tt_board(board: Board, ssh, sites, claim: Claim | None, clock, 
     return _combine(site_verdict, ssh_verdict)
 
 
-def _carries_tt(board: Board) -> bool:
-    """A welland Pi whose registry boards include a Tiny Tapeout one (type "TT ...")."""
-    return board.site == "welland" and any(t.strip().startswith("TT") for t in (board.type or "").split(","))
-
-
 async def _tt_rule_of_pi(board: Board, sites, clock, sleep, now) -> Verdict:
     """The site rule of the Tiny Tapeout board plugged into welland Pi `board`.
 
@@ -366,7 +361,7 @@ async def check(
     try:
         if board.site == "tinytapeout":
             return await _check_tt_board(board, ssh, sites, claim, clock, sleep, now)
-        if _carries_tt(board):
+        if carries_tt(board):
             return await _check_pi_with_tt(board, ssh, sites, claim, clock, sleep, now)
         return await _check_ssh(board, ssh, claim, now)
     except Exception as exc:
