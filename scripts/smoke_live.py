@@ -3,7 +3,8 @@
 Read-only by default: inventory of every site, board_status with the in-use check on welland
 pi-sw1-p2 and ps1 pi21, and, for each of those boards that is idle, claim -> connect -> run `hostname` ->
 release. `--power BOARD` (exact board id, e.g. welland:pi-sw1-p2) additionally does
-claim -> power_cycle -> release on that board; it changes the board, so run it only on purpose.
+claim -> power_cycle -> release on that board; it changes the board, so run it only on purpose. The
+boards nobody may touch (PROTECTED) are refused. Exits 1 when any step failed.
 
 Uses the same path as the CLI: client.connect() starts the broker if needed. The holder is an
 isolated "smoke:<pid>". Run: uv run python scripts/smoke_live.py [--power BOARD]
@@ -19,6 +20,20 @@ import time
 from fpgas_online_mcp.client import BrokerClient, BrokerError, connect
 
 DEFAULT_BOARDS = ["welland:pi-sw1-p2", "ps1:pi21"]
+# Never power-cycled by this script (common.md: other people's long-running work lives there).
+PROTECTED = {
+    "tinytapeout:fpga-1",
+    "tinytapeout:fpga-3",
+    "tinytapeout:fpga-4",
+    "tinytapeout:tt-fd1a167bd863a198",
+    "welland:pi-sw2-p9",
+    "welland:pi-sw2-p10",
+    "welland:pi-sw2-p13",
+    "welland:pi-sw2-p14",
+    "ps1:pi3",
+    "ps1:pi7",
+}
+failures: list[str] = []
 
 
 def show(text: str, limit: int = 600) -> None:
@@ -37,6 +52,7 @@ async def step(label: str, c: BrokerClient, op: str, **args):
     dt = time.monotonic() - t
     print(f"[{dt:7.2f}s] {label}: {'ERROR ' + err.code if err else 'ok'}")
     if err:
+        failures.append(label)
         show(err.message)
     return result, err
 
@@ -75,6 +91,8 @@ async def exercise(c: BrokerClient, board: str, power: bool) -> None:
         if power:
             r, _ = await step("power_cycle", c, "power_cycle", board=board, claim_id=cid)
             if r:
+                if not r["ok"]:
+                    failures.append("power_cycle")
                 print(f"    ok={r['ok']} seconds_to_back={r['seconds_to_back']} message={r['message']}")
                 for s in r["steps"]:
                     print(f"      step: {s}")
@@ -109,15 +127,21 @@ async def main_async(power: str | None) -> int:
     finally:
         await c.close()
     print(f"\ntotal {time.monotonic() - t0:.1f}s")
+    if failures:
+        print(f"FAILED steps: {', '.join(failures)}")
+        return 1
     return 0
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--power", metavar="BOARD", help="also power-cycle this board (exact id, e.g. welland:pi-sw1-p2)")
-    args = p.parse_args()
+    args = p.parse_args(argv)
     if args.power and ":" not in args.power:
         print("--power needs the exact board id '<site>:<name>'", file=sys.stderr)
+        return 2
+    if args.power and args.power.strip() in PROTECTED:
+        print(f"--power refuses {args.power}: it is one of the boards never to touch", file=sys.stderr)
         return 2
     return asyncio.run(main_async(args.power))
 
