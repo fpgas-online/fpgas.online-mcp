@@ -351,3 +351,17 @@ async def test_old_claim_file_without_host(store, tmp_path):
     del data["host"]
     path.write_text(json.dumps(data))
     assert store.get(c.claim_id).host is None
+
+
+async def test_two_stores_race_for_a_tt_board_and_its_pi_one_wins(tmp_path, clock):
+    a, b = ClaimStore(tmp_path, clock), ClaimStore(tmp_path, clock)
+    for first, second in ((a, b), (b, a)):
+        results = await asyncio.gather(
+            first.claim(TT, 30, "chip", "a@h", host=PI),
+            second.claim(PI, 30, "blink", "b@h"),
+            return_exceptions=True,
+        )
+        won = [r for r in results if isinstance(r, Claim)]
+        lost = [r for r in results if isinstance(r, ClaimConflict)]
+        assert len(won) == 1 and len(lost) == 1 and lost[0].shared == PI
+        await first.release(won[0].claim_id)
