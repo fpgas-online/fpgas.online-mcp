@@ -174,7 +174,11 @@ def _verdict_view(v) -> dict:
 
 
 def _conflict(e: ClaimConflict) -> BrokerError:
-    return BrokerError("claimed", f"{e.existing.board} is {e}; ask the user or pick another board")
+    return BrokerError(
+        "claimed",
+        f"{e.existing.board} is {e}; ask the user or pick another board. Never pass another holder's claim_id; "
+        "ask the user instead",
+    )
 
 
 # --- board lookup ---------------------------------------------------------------------------------

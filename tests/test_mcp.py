@@ -160,7 +160,7 @@ async def test_tool_list_and_annotations(stack):
     async with stack.session() as c:
         assert c.instructions == mcp_server.INSTRUCTIONS
         assert len(c.instructions) <= 600
-        for word in ("claim_board", "in-use", "untrusted", "guide"):
+        for word in ("claim_board", "in-use", "untrusted", "guide", "another holder's claim_id"):
             assert word in c.instructions
         tools = {t.name: t for t in (await c.list_tools()).tools}
     assert set(tools) == TOOLS
@@ -320,6 +320,7 @@ async def test_claim_conflict_and_claim_id_visibility(stack):
         assert claim["in_use"]["verdict"] == "idle"
         text = err(await call(you, "claim_board", board=WELLAND, purpose="mine"))
         assert "claimed by me:1@host until" in text and "UTC (blink)" in text and "pick another board" in text
+        assert "Never pass another holder's claim_id" in text
 
         seen_by_me = ok(await call(me, "board_status", board=WELLAND, check_use=False))["board"]["claim"]
         seen_by_you = ok(await call(you, "board_status", board=WELLAND, check_use=False))["board"]["claim"]
