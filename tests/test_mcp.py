@@ -53,9 +53,16 @@ class FakePower:
     def __init__(self):
         self.result = CycleResult(True, 42.0, "the board restarted and answers again after 42 s", None, ["toggled"])
         self.calls = []
+        self.should_stop = None
+        self.gate: asyncio.Event | None = None  # set: wait for it (the in-use check is running)
+        self.started = asyncio.Event()
 
     async def __call__(self, board, claim, sites, ssh, **kw):
         self.calls.append((str(board.id), claim.claim_id))
+        self.should_stop = kw["should_stop"]
+        self.started.set()
+        if self.gate is not None:
+            await self.gate.wait()
         return self.result
 
 
@@ -375,6 +382,35 @@ async def test_cancelled_claim_creates_no_claim(stack):
     assert stack.state.claims.for_board(WELLAND) is None
 
 
+async def test_cancelled_power_cycle_stops_before_toggle(stack):
+    async with stack.session() as s:
+        claim = ok(await call(s, "claim_board", board=WELLAND, purpose="cycle"))
+    stack.power.gate = asyncio.Event()
+    c = await client.connect("me:1@host", spawn=False)
+    t = asyncio.create_task(c.call("power_cycle", board=WELLAND, claim_id=claim["claim_id"]))
+    await asyncio.wait_for(stack.power.started.wait(), 5)
+    assert stack.power.should_stop() is False
+    t.cancel()  # Esc during the check: the client closes its connection
+    with pytest.raises(asyncio.CancelledError):
+        await t
+    await asyncio.sleep(0.1)
+    assert stack.power.should_stop() is True
+    stack.power.gate.set()
+
+
+async def test_power_cycle_stops_when_the_claim_is_released_during_the_check(stack):
+    async with stack.session() as s:
+        claim = ok(await call(s, "claim_board", board=WELLAND, purpose="cycle"))
+        stack.power.gate = asyncio.Event()
+        t = asyncio.create_task(call(s, "power_cycle", board=WELLAND))
+        await asyncio.wait_for(stack.power.started.wait(), 5)
+        assert stack.power.should_stop() is False
+        await stack.state.claims.release(claim["claim_id"])
+        assert stack.power.should_stop() is True
+        stack.power.gate.set()
+        await t
+
+
 async def test_tinytapeout_claim_records_state(stack):
     status = {"reachable": True, "kind": "fpga", "clients": 0, "idle_display": {"state": "loaded"}}
     stack.site.override[("tinytapeout.fpgas.online", "/board/fpga-2/status.json")] = httpx.Response(200, json=status)
@@ -526,7 +562,7 @@ async def test_long_call_does_not_block_and_cancel_leaves_pool_usable(stack):
     async def slow(board, claim, sites, ssh, **kw):
         started.set()
         await release.wait()
-        return await real(board, claim, sites, ssh)
+        return await real(board, claim, sites, ssh, **kw)
 
     stack.state.power_cycle = slow
     async with stack.session() as c:
@@ -626,7 +662,7 @@ def test_render_backstop_keeps_wrapper_and_json():
 
 
 async def test_power_cycle_refusal_signals_are_wrapped(stack):
-    async def check_then_refuse(board, claim, sites, ssh, inuse_check):
+    async def check_then_refuse(board, claim, sites, ssh, inuse_check, should_stop):
         v = await inuse_check(board, ssh, sites, claim)
         return CycleResult(False, None, f"not cycling: the in-use check says {v.verdict} ({'; '.join(v.signals)})")
 

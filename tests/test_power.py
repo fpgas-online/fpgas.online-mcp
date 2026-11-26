@@ -333,3 +333,36 @@ async def test_tt_unreadable_uptime_refuses_and_empty_port_refuses():
     sites = Sites(clock, tt=tt_status(None), page=BoardPage(tt_port="9", tt_switch="x"))
     r = await run(board("tinytapeout", "fpga-2"), sites, Ssh(clock, sites, lambda n, t: None), clock)
     assert not r.ok and "no usable switch" in r.message and sites.calls == []
+
+
+async def test_should_stop_before_toggle_toggles_nothing():
+    clock = Clock()
+    sites = Sites(clock)
+    ssh = Ssh(clock, sites, reboot_after(20))
+    r = await power.power_cycle(
+        board(), CLAIM, sites, ssh, clock=clock, sleep=clock.sleep, inuse_check=idle, should_stop=lambda: True
+    )
+    assert not r.ok and r.message == power.CANCELLED and sites.calls == [] and ssh.exits == 0
+
+
+async def test_claim_released_during_in_use_check_stops_before_toggle():
+    clock = Clock()
+    sites = Sites(clock)
+    ssh = Ssh(clock, sites, reboot_after(20))
+    live = [True]
+
+    async def check_then_release(*a, **k):
+        live[0] = False  # someone released the claim while the check ran
+        return Verdict("idle", [], "x")
+
+    r = await power.power_cycle(
+        board(),
+        CLAIM,
+        sites,
+        ssh,
+        clock=clock,
+        sleep=clock.sleep,
+        inuse_check=check_then_release,
+        should_stop=lambda: not live[0],
+    )
+    assert not r.ok and "nothing was toggled" in r.message and sites.calls == []

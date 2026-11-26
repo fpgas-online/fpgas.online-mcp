@@ -476,7 +476,13 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
 async def op_power_cycle(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = _claim_for(state, board, args, conn)
-    r = await state.power_cycle(board, claim, state.sites, state.ssh, inuse_check=state.check)
+
+    def should_stop() -> bool:
+        """The caller hung up, or the claim was released or expired, while the check ran."""
+        live = state.claims.for_board(str(board.id))
+        return conn.closed() or live is None or live.claim_id != claim.claim_id
+
+    r = await state.power_cycle(board, claim, state.sites, state.ssh, inuse_check=state.check, should_stop=should_stop)
     return {
         "board": str(board.id),
         "ok": r.ok,

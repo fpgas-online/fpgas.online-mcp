@@ -27,6 +27,7 @@ NOT_POE = (
     "the switch cycled the port but this host did not lose power: it is probably not powered by PoE, "
     "so the site cannot reset it — ask the user to reset it by hand"
 )
+CANCELLED = "cancelled (or the claim ended) before the toggle; nothing was toggled"
 NO_RETURN = "the board did not come back within 5 minutes: do not cycle it again, ask the user"
 
 _BOOT_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
@@ -114,7 +115,10 @@ async def power_cycle(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], object] = asyncio.sleep,
     inuse_check=inuse.check,
+    should_stop: Callable[[], bool] = lambda: False,
 ) -> CycleResult:
+    """`should_stop()` is asked just before the master is closed and just before the toggle: true (the
+    caller hung up, or the claim is no longer live) ends the cycle with nothing toggled."""
     steps: list[str] = []
     is_tt = board.site == "tinytapeout"
 
@@ -157,8 +161,14 @@ async def power_cycle(
     if by_registry:
         steps.append("boot id from the registry (ssh failed)")
 
+    if should_stop():
+        steps.append("stopped before the toggle")
+        return _refuse(CANCELLED, steps)
     if not is_tt:
         await ssh.exit(board.id)  # the master would sit on a dead socket after the reboot
+    if should_stop():
+        steps.append("stopped before the toggle")
+        return _refuse(CANCELLED, steps)
 
     t_toggle = clock()
     toggle_lost = None
