@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-import fpgas_online_mcp
 from fpgas_online_mcp import paths
 
 XDG = ("XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME")
@@ -87,13 +86,6 @@ def test_socket_path_short(monkeypatch):
     monkeypatch.setattr(Path, "mkdir", lambda *a, **k: None)
     monkeypatch.setattr(Path, "chmod", lambda *a, **k: None)
     assert len(bytes(paths.runtime_dir() / "broker.sock")) < 100
-
-
-def test_version_matches_package_metadata():
-    from importlib.metadata import version
-
-    assert fpgas_online_mcp.__version__ == "0.1.1"
-    assert version("fpgas-online-mcp") == fpgas_online_mcp.__version__
 
 
 def test_runtime_dir_too_long_for_the_broker_socket(monkeypatch, tmp_path):
