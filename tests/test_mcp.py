@@ -526,10 +526,60 @@ async def test_power_cycle_failure_is_error(stack):
         assert "not cycling" in text
 
 
-async def test_tinytapeout_connect_says_no_ssh(stack):
+# A chip board whose page names switch 2 port 11: welland:pi-sw2-p11, a Pi welland does not list (404).
+TT_CHIP = "tinytapeout:tt-ab2a48a7ee008dd9"
+TT_PI = "welland:pi-sw2-p11"
+NO_PI = '<html><div data-port="" data-switch=""></div></html>'
+
+
+async def test_tinytapeout_connect_and_run_on_its_pi(stack):
+    async with stack.session() as c:
+        ok(await call(c, "claim_board", board=TT_CHIP, purpose="chip test"))
+        info = ok(await call(c, "connect", board=TT_CHIP))
+        assert info["board"] == TT_CHIP and info["host"] == TT_PI
+        assert info["alias"] == "fpgas-welland-pi-sw2-p11" and info["ssh"].startswith("ssh -F ")
+        result = await call(c, "run", board=TT_CHIP, command="echo on the pi")
+        text = text_of(result, 8192)
+        assert not result.is_error, text
+        meta, body = json.loads(text.split("\n", 1)[0]), text.split("\n", 1)[1]
+        assert meta["host"] == TT_PI and meta["exit_status"] == 0
+        assert body == f"{UNTRUSTED}on the pi\n</board-output>"
+    config = (paths.config_dir() / "ssh_config").read_text()
+    assert "Host fpgas-welland-pi-sw2-p11" in config and "Port 21122" in config
+    assert "REDACTED" not in config  # the fixture's site password stays in the password file
+
+
+async def test_tinytapeout_board_that_names_no_pi_is_not_connected(stack):
+    stack.site.override[("tinytapeout.fpgas.online", "/board/fpga-2/")] = httpx.Response(200, text=NO_PI)
     async with stack.session() as c:
         ok(await call(c, "claim_board", board=TT, purpose="x"))
-        assert "Tiny Tapeout" in err(await call(c, "connect", board=TT))
+        for name, args in (("connect", {}), ("run", {"command": "true"})):
+            text = err(await call(c, name, board=TT, **args))
+            assert "names no Pi" in text and "not connected" in text
+    assert stack.state.claims.for_board(TT).host is None
+
+
+async def test_tinytapeout_board_and_its_pi_exclude_each_other(stack):
+    async with stack.session("me:1@host") as me, stack.session("you:2@host") as you:
+        claim = ok(await call(me, "claim_board", board=TT_CHIP, purpose="chip test"))
+        assert stack.state.claims.for_board(TT_CHIP).host == TT_PI
+        checks = len(stack.inuse.calls)
+        text = err(await call(you, "claim_board", board=TT_PI, purpose="blink"))
+        assert f"{TT_CHIP} is claimed by me:1@host" in text and f"same Pi ({TT_PI})" in text
+        assert len(stack.inuse.calls) == checks  # refused before the slow in-use check
+        ok(await call(me, "release_board", claim_id=claim["claim_id"]))
+        ok(await call(you, "claim_board", board=TT_PI, purpose="blink"))
+        text = err(await call(me, "claim_board", board=TT_CHIP, purpose="chip test"))
+        assert f"{TT_PI} is claimed by you:2@host" in text
+
+
+async def test_board_status_of_a_tinytapeout_board_names_its_pi(stack):
+    async with stack.session() as c:
+        status = ok(await call(c, "board_status", board=TT_CHIP, check_use=False))
+        assert status["board"]["host"] == TT_PI
+        stack.site.override[("tinytapeout.fpgas.online", "/board/fpga-2/")] = httpx.Response(200, text=NO_PI)
+        assert "host" not in ok(await call(c, "board_status", board=TT, check_use=False))["board"]
+        assert "host" not in ok(await call(c, "board_status", board=WELLAND, check_use=False))["board"]
 
 
 async def test_claims_op_for_cli(stack):

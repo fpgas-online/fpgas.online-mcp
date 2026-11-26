@@ -7,6 +7,10 @@ Claim resolution (connect, run, power_cycle): an explicit `claim_id` must be the
 board (the id is the authority: any holder may pass it). Without one, the board's live claim counts if
 its id is among `claim_ids` (the ids the front end created and remembers) or was created on this
 connection. No claim -> an error naming claim_board.
+
+A Tiny Tapeout board is plugged into a welland Pi (its board page names which, read live):
+connect and run use that Pi's ssh master, and its claim records the Pi so the board and the Pi
+cannot be claimed by two holders at once.
 """
 
 import json
@@ -16,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from . import guide, inuse, power
-from .boards import Board, BoardId, inventory, switch_port
+from .boards import Board, BoardId, inventory, switch_port, tt_host
 from .broker import Broker, Conn
 from .claims import Claim, ClaimConflict, ClaimGone, ClaimStore
 from .paths import PathTooLong
@@ -174,6 +178,36 @@ def _verdict_view(v) -> dict:
     return view
 
 
+async def _host_or_none(state: State, board: Board) -> BoardId | None:
+    """The Pi of a Tiny Tapeout board, or None (another site's board, no Pi named, page unreadable)."""
+    if board.site != "tinytapeout":
+        return None
+    try:
+        return await tt_host(state.sites, board.name)
+    except SiteError as e:
+        log.info("cannot read the Pi of %s: %s", board.id, e)
+        return None
+
+
+async def _ssh_target(state: State, board: Board) -> tuple[BoardId, BoardId | None]:
+    """(host to ssh to, via): the board itself, or for a Tiny Tapeout board its Pi and the board."""
+    if board.site != "tinytapeout":
+        return board.id, None
+    try:
+        host = await tt_host(state.sites, board.name)
+    except SiteError as e:
+        raise BrokerError(
+            "site_unavailable", f"cannot read the board page of {board.id} to find its Pi: {e}; try again in a minute"
+        ) from e
+    if host is None:
+        raise BrokerError(
+            "not_connected",
+            f"the board page of {board.id} names no Pi: the board is not connected now; check board_status later "
+            "or pick another board",
+        )
+    return host, board.id
+
+
 def _conflict(e: ClaimConflict) -> BrokerError:
     return BrokerError(
         "claimed",
@@ -303,6 +337,9 @@ async def op_board_status(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = state.claims.for_board(str(board.id))
     result = {"board": _board_view(board, claim, conn, full=True)}
+    host = await _host_or_none(state, board)
+    if host is not None:
+        result["board"]["host"] = str(host)
     if args.get("check_use", True) is not False:
         result["in_use"] = _verdict_view(await state.check(board, state.ssh, state.sites, None))
     return result
@@ -339,7 +376,13 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
 
     verdict = None
     tt_state = None
+    host = None
     if renew_id is None:
+        host = await _host_or_none(state, board)
+        key = str(host) if host else None
+        other = state.claims.shared(str(board.id), key)
+        if other is not None:  # before the slow in-use check: the same Pi is already claimed
+            raise _conflict(ClaimConflict(other, shared=key or str(board.id)))
         verdict = await state.check(board, state.ssh, state.sites, None)
         if verdict.verdict != "idle" and override is None:
             signals = "; ".join(verdict.signals)
@@ -364,6 +407,7 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
             claim_id=renew_id,
             override_reason=override if renew_id is None else None,
             tt_state_at_claim=tt_state,
+            host=str(host) if host else None,
         )
     except ClaimConflict as e:
         raise _conflict(e) from e
@@ -419,8 +463,9 @@ def _ssh_error(board: Board, e: Exception, next_step: str) -> BrokerError:
 async def op_connect(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = _claim_for(state, board, args, conn)
+    host, via = await _ssh_target(state, board)
     try:
-        info = await state.ssh.ensure_master(board.id)
+        info = await state.ssh.ensure_master(host, via=via)
     except PathTooLong as e:
         raise BrokerError("path_too_long", f"{e}; tell the user") from e
     except PortMismatch as e:
@@ -429,8 +474,11 @@ async def op_connect(state: State, args: dict, conn: Conn) -> dict:
         raise BrokerError("no_ssh", f"{e}; use board_status and the guide topic tinytapeout") from e
     except (RuntimeError, SiteError) as e:
         raise _ssh_error(board, e, "check board_status and retry later, or pick another board") from e
+    result = {"board": str(board.id)}
+    if via is not None:
+        result["host"] = str(host)
     return {
-        "board": str(board.id),
+        **result,
         "claim_id": claim.claim_id,
         "alias": info.alias,
         "config": info.config_path,
@@ -460,8 +508,9 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
     command = _str(args, "command", required=True)
     timeout_s = _int(args, "timeout_s", 60, 1, MAX_RUN_TIMEOUT_S)
     _claim_for(state, board, args, conn)
+    host, via = await _ssh_target(state, board)
     try:
-        r = await state.ssh.run(board.id, command, timeout_s)
+        r = await state.ssh.run(host, command, timeout_s, via=via)
     except PathTooLong as e:
         raise BrokerError("path_too_long", f"{e}; tell the user") from e
     except PortMismatch as e:
@@ -472,8 +521,10 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
         raise _ssh_error(board, e, "check board_status and retry later") from e
     budget = RUN_LIMIT - RUN_HEADER_RESERVE - len(wrap_untrusted("").encode())
     output, cut = _fit_bytes(defuse(r.output), budget)
-    result = {
-        "board": str(board.id),
+    result = {"board": str(board.id)}
+    if via is not None:
+        result["host"] = str(host)
+    result |= {
         "exit_status": r.exit_status,
         "timed_out": r.timed_out,
         "truncated": r.truncated or cut,
