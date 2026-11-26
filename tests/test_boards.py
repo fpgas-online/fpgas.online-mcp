@@ -111,3 +111,11 @@ def test_ports_from_names():
     for s, name in (("welland", "pi-sw1-p2x"), ("ps1", "raspberry"), ("tinytapeout", "fpga-2"), ("welland", "pi3")):
         assert ssh_port(s, name) is None and switch_port(s, name) is None
     assert switch_port("welland", "pi-sw2-p9") == (9, 2) and switch_port("ps1", "pi7") == (7, None)
+
+
+async def test_inventory_survives_registry_entries_that_are_not_objects(client, site):  # noqa: F811
+    reg = json.loads((FIX / "welland_registry.json").read_text())
+    reg["machines"].insert(0, "junk")
+    site.override[("welland.fpgas.online", "/fleet/registry.json")] = httpx.Response(200, json=reg)
+    inv = await inventory(client, "welland")
+    assert "welland:pi-sw1-p2" in by_id(inv) and not inv.notes["welland"].startswith("unavailable")

@@ -103,7 +103,8 @@ class Cache:
         """
         if not live:
             old = self._load(key)
-            if old is not None and (self._clock() - old.as_of).total_seconds() < ttl_s:
+            # A negative age (the clock went back, or an entry from the future) counts as expired.
+            if old is not None and 0 <= (self._clock() - old.as_of).total_seconds() < ttl_s:
                 return old
         flight_key = (key, live)
         flight = self._flights.get(flight_key)

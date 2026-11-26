@@ -7,6 +7,7 @@ import shutil
 import signal
 import socket
 import stat
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -385,3 +386,14 @@ async def test_stale_reply_is_skipped(env):
     await c.close()
     server.close()
     await server.wait_closed()
+
+
+def test_failed_spawn_is_a_broker_error(env, monkeypatch):
+    def fail(*a, **k):
+        raise subprocess.CalledProcessError(1, a[0])
+
+    paths.state_dir()  # created as the real _spawn expects
+    monkeypatch.setattr(client.subprocess, "run", fail)
+    with pytest.raises(BrokerError) as e:
+        client._spawn()
+    assert e.value.code == "start_failed" and "broker.log" in e.value.message

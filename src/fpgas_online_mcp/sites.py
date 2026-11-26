@@ -3,6 +3,7 @@
 import base64
 import binascii
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -13,6 +14,8 @@ import httpx
 
 from . import __version__
 from .cache import Cache, Entry
+
+log = logging.getLogger(__name__)
 
 SITES = ("welland", "ps1", "tinytapeout")
 USER_AGENT = f"fpgas-online-mcp/{__version__}"
@@ -55,10 +58,14 @@ def _text(data: bytes) -> str:
 
 
 def _parse_registry(data: bytes) -> list[dict]:
+    """The registry's machines; an entry that is not an object is skipped with a warning."""
     machines = json.loads(data)["machines"]
     if not isinstance(machines, list):
         raise ValueError("machines is not a list")
-    return machines
+    good = [m for m in machines if isinstance(m, dict)]
+    if len(good) < len(machines):
+        log.warning("welland registry: skipped %d entries that are not objects", len(machines) - len(good))
+    return good
 
 
 def _unique(items) -> list[str]:

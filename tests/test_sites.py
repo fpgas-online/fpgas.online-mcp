@@ -173,6 +173,23 @@ async def test_cache_ttl(client, site, clock):
     assert entry.as_of == clock.now
 
 
+async def test_cache_entry_from_the_future_is_expired(client, site, clock):
+    await client.tt_status("tt06")
+    clock.advance(-60)  # the clock went back: the entry's age is negative
+    await client.tt_status("tt06")
+    assert site.count("/board/tt06/status.json") == 2
+
+
+async def test_registry_skips_entries_that_are_not_objects(client, site, caplog):
+    reg = json.loads((FIX / "welland_registry.json").read_text())
+    n = len(reg["machines"])
+    reg["machines"] += ["junk", 7, None]
+    site.override[("welland.fpgas.online", "/fleet/registry.json")] = httpx.Response(200, json=reg)
+    machines, _ = await client.welland_registry()
+    assert len(machines) == n and all(isinstance(m, dict) for m in machines)
+    assert "skipped 3 entries" in caplog.text
+
+
 async def test_persisted_across_instances(tmp_path, clock, site):
     async with httpx.AsyncClient(transport=httpx.MockTransport(site)) as http:
         await SiteClient(http, Cache(tmp_path, clock)).ps1_hosts()
