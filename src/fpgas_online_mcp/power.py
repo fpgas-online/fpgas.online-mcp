@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import inuse
-from .boards import Board, BoardId, switch_port, tt_host_of
+from .boards import Board, BoardId, switch_port, tt_host_of, tt_switch_port
 from .claims import Claim
 from .sites import SiteError
 from .ssh import RUN_SLACK_S
@@ -100,10 +100,10 @@ async def _toggle_args(board: Board, sites) -> tuple[str, int | None, BoardId | 
     page = await sites.board_page("tinytapeout", board.name, live=True)
     if not page.tt_port or not page.tt_switch:
         return "the board page names no switch port: nothing to cycle"
-    try:
-        return page.tt_port, int(page.tt_switch), tt_host_of(page)
-    except ValueError:
-        return "the board page names no usable switch: nothing to cycle"
+    sp = tt_switch_port(page)
+    if sp is None:
+        return "the board page names no usable switch and port: nothing to cycle"
+    return str(sp[1]), sp[0], tt_host_of(page)
 
 
 def _refuse(message: str, steps: list[str]) -> CycleResult:

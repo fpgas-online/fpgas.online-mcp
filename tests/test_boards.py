@@ -7,8 +7,16 @@ import httpx
 import pytest
 from test_sites import FIX, client, clock, site  # noqa: F401  (fixtures)
 
-from fpgas_online_mcp.boards import TT_HOST_SITE, BoardId, inventory, ssh_port, switch_port, tt_host
-from fpgas_online_mcp.sites import SiteError
+from fpgas_online_mcp.boards import (
+    TT_HOST_SITE,
+    BoardId,
+    inventory,
+    ssh_port,
+    switch_port,
+    tt_host,
+    tt_switch_port,
+)
+from fpgas_online_mcp.sites import BoardPage, SiteError
 
 
 def by_id(inv):
@@ -143,3 +151,9 @@ async def test_tt_host_none_without_a_usable_switch_and_port(client, site, port,
 async def test_tt_host_site_error_propagates(client):  # noqa: F811
     with pytest.raises(SiteError):
         await tt_host(client, "tt06")  # no fixture: 404
+
+
+def test_tt_switch_port_is_the_one_parser():
+    assert tt_switch_port(BoardPage(tt_port="35", tt_switch="2")) == (2, 35)
+    for port, switch in (("07", "2"), ("7", "02"), ("", ""), ("7", None), ("0", "2"), ("x", "2")):
+        assert tt_switch_port(BoardPage(tt_port=port, tt_switch=switch)) is None

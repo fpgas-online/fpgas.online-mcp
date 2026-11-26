@@ -84,12 +84,22 @@ async def tt_host(sites: SiteClient, slug: str) -> BoardId | None:
     return tt_host_of(await sites.board_page("tinytapeout", slug, live=True))
 
 
-def tt_host_of(page: BoardPage) -> BoardId | None:
-    """The welland Pi a Tiny Tapeout board page names (its switch and port), or None."""
+def tt_switch_port(page: BoardPage) -> tuple[int, int] | None:
+    """(switch, port) a Tiny Tapeout board page names, or None unless both are plain positive integers.
+
+    The one parser for these attributes: the Pi lookup and the power toggle must agree on what the
+    page says, so a value like "07" is refused by both rather than read differently.
+    """
     switch, port = page.tt_switch or "", page.tt_port or ""
     if not (_POSITIVE.fullmatch(switch) and _POSITIVE.fullmatch(port)):
         return None
-    return BoardId(TT_HOST_SITE, f"pi-sw{switch}-p{port}")
+    return int(switch), int(port)
+
+
+def tt_host_of(page: BoardPage) -> BoardId | None:
+    """The welland Pi a Tiny Tapeout board page names (its switch and port), or None."""
+    sp = tt_switch_port(page)
+    return None if sp is None else BoardId(TT_HOST_SITE, f"pi-sw{sp[0]}-p{sp[1]}")
 
 
 @dataclass(frozen=True)

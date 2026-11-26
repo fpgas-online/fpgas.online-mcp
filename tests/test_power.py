@@ -334,10 +334,11 @@ async def test_tt_unreadable_uptime_refuses_and_empty_port_refuses():
     sites = Sites(clock, tt=tt_status(None), page=BoardPage(tt_port="", tt_switch=""))
     r = await run(board("tinytapeout", "fpga-2"), sites, Ssh(clock, sites, lambda n, t: None), clock)
     assert not r.ok and "nothing to cycle" in r.message and sites.calls == []
-    sites = Sites(clock, tt=tt_status(None), page=BoardPage(tt_port="9", tt_switch="x"))
-    ssh = Ssh(clock, sites, lambda n, t: None)
-    r = await run(board("tinytapeout", "fpga-2"), sites, ssh, clock)
-    assert not r.ok and "no usable switch" in r.message and sites.calls == [] and ssh.exits == 0
+    for port, switch in (("9", "x"), ("09", "2")):  # the same parser as the Pi lookup: "09" is not a port
+        sites = Sites(clock, tt=tt_status(None), page=BoardPage(tt_port=port, tt_switch=switch))
+        ssh = Ssh(clock, sites, lambda n, t: None)
+        r = await run(board("tinytapeout", "fpga-2"), sites, ssh, clock)
+        assert not r.ok and "no usable switch" in r.message and sites.calls == [] and ssh.exits == 0
 
 
 async def test_should_stop_before_toggle_toggles_nothing():
