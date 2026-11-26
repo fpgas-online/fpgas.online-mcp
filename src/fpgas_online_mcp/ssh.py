@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import paths
 from .boards import BoardId, ssh_port
+from .sites import SiteError
 
 SITE_HOSTS = {"welland": "welland.fpgas.online", "ps1": "ps1.fpgas.online"}
 START_TIMEOUT_S = 30.0
@@ -144,7 +145,10 @@ class SshManager:
 
     def _require_ssh(self, board: BoardId) -> None:
         if board.site not in SITE_HOSTS:
-            raise ValueError(f"{board} has no ssh: Tiny Tapeout boards are reached through the site's web API")
+            raise ValueError(
+                f"{board} has no ssh of its own: a Tiny Tapeout board is reached over ssh on the welland Pi it is "
+                "plugged into (connect and run on the board find that Pi)"
+            )
 
     def _info(self, board: BoardId) -> MasterInfo:
         alias, cfg = self.alias(board), shlex.quote(str(self.config_path))
@@ -277,7 +281,32 @@ class SshManager:
             return
         await self._control(board, "exit")
 
-    async def ensure_master(self, board: BoardId) -> MasterInfo:
+    async def _password(self, board: BoardId, expected: int, via: BoardId | None) -> str:
+        """The ssh password from the host's own page, whose port must match its name.
+
+        With `via` (the Tiny Tapeout board plugged into this host), a host whose page does not exist
+        (HTTP 404: a Pi that carries only a Tiny Tapeout board is not listed by its site) takes the
+        site-wide password instead; the port then comes from the name alone. Without `via` a 404
+        still fails: a Pi the site does not offer stays refused.
+        """
+        try:
+            page = await self._sites.board_page(board.site, board.name)
+        except SiteError as e:
+            if via is None or e.status != 404:
+                raise
+            return await self._sites.site_password(board.site)
+        if not page.password or page.ssh_port is None:
+            raise RuntimeError(f"the board page of {board} gave no ssh password or port")
+        if page.ssh_port != expected:
+            raise PortMismatch(
+                f"the board page of {board} gives ssh port {page.ssh_port} but the name means port {expected}; "
+                "not connecting, since that could reach another board's host"
+            )
+        return page.password
+
+    async def ensure_master(self, board: BoardId, via: BoardId | None = None) -> MasterInfo:
+        """Open (or reuse) the master for host `board`. `via`: the Tiny Tapeout board on this host, when
+        the master is opened for that board (see _password). Never logs or returns the password."""
         self._require_ssh(board)
         async with self._locks.setdefault(str(board), asyncio.Lock()):
             if self.check_paths:
@@ -287,15 +316,7 @@ class SshManager:
             expected = ssh_port(board.site, board.name)
             if expected is None:
                 raise PortMismatch(f"cannot work out the ssh port of {board} from its name; not connecting")
-            page = await self._sites.board_page(board.site, board.name)
-            if not page.password or page.ssh_port is None:
-                raise RuntimeError(f"the board page of {board} gave no ssh password or port")
-            if page.ssh_port != expected:
-                raise PortMismatch(
-                    f"the board page of {board} gives ssh port {page.ssh_port} but the name means port {expected}; "
-                    "not connecting, since that could reach another board's host"
-                )
-            password = page.password
+            password = await self._password(board, expected, via)
             _write_private(self._config_dir / f"{board.site}.pw", password, 0o600)
             _write_private(self._config_dir / "askpass", ASKPASS, 0o700)
             blocks = self._load_blocks()
@@ -315,11 +336,12 @@ class SshManager:
                 raise RuntimeError(f"could not open the ssh master for {board} (exit {code}): {detail}")
             return self._info(board)
 
-    async def run(self, board: BoardId, command: str, timeout_s: float) -> RunResult:
+    async def run(self, board: BoardId, command: str, timeout_s: float, via: BoardId | None = None) -> RunResult:
+        """Run one command on host `board` over its master; `via` as for ensure_master."""
         self._require_ssh(board)
         if not command.strip():
             raise ValueError("command is empty")
-        await self.ensure_master(board)
+        await self.ensure_master(board, via=via)
         # The user's login shell (bash on the boards), as a plain `ssh host cmd` would use; `--` so a
         # command starting with "-" is not read as shell options. $SHELL is expanded by the login shell.
         remote = f'timeout -k {REMOTE_KILL_S} {timeout_s:g} "${{SHELL:-sh}}" -c -- {shlex.quote(command)}'
