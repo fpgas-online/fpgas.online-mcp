@@ -208,14 +208,19 @@ for the holder, while a human who arrives during the claim still stops it.
 
 - Python ≥3.12, `uv`. MCP front end on the official `mcp` SDK or FastMCP — the builder
   picks after checking current versions — pinned exactly. httpx for site calls.
+- Versions come from `git describe` (`build_version.py`): `v<X>.<Y>-<N>-g<hash>` becomes
+  `<X>.<Y>.<N>`, so every commit on main has its own, increasing number. No release tags
+  beyond the `v0.0` base tag on the first commit, no hand-edited version.
+- CI publishes every push to main to PyPI as `fpgas-online-mcp` (trusted publishing, the
+  `pypi` environment), after the tests pass.
 - The plugin manifest's `mcpServers` (`.claude-plugin/plugin.json`, not a root `.mcp.json`,
-  which would also act as a project config for contributors) runs the front end from the
-  plugin directory (`uv run --project ${CLAUDE_PLUGIN_ROOT} --no-dev --frozen
-  fpgas-online-mcp`: no dev tools, no re-lock), so installing the plugin installs the server.
-- For cloud sessions (or any repo), the README gives a repo-level `.mcp.json` entry that
-  runs the `main` branch straight from GitHub (no release tags or pinned versions):
-  `uvx --from git+https://github.com/fpgas-online/fpgas.online-mcp fpgas-online-mcp`.
-  No PyPI release.
+  which would also act as a project config for contributors) runs `uvx
+  fpgas-online-mcp@latest`, so installing the plugin installs the server. It cannot build
+  from the plugin directory: Claude Code installs a copy without `.git` (checked
+  2026-11-26), so `git describe` has nothing to read there. The manifest has no `version`,
+  so Claude Code uses the commit SHA and every push is an update.
+- For cloud sessions (or any repo), the README gives the same `uvx fpgas-online-mcp@latest`
+  as a repo-level `.mcp.json` entry.
 - Sessions on big-storage are not sandboxed (checked 2026-11-25), so their shells can use
   the broker socket and the ssh ControlPath sockets. The README notes that a sandboxed
   session must allow `$XDG_RUNTIME_DIR/fpgas-online/` for the CLI and shared ssh to work.

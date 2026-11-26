@@ -18,8 +18,13 @@ fpgas-online = "fpgas_online_mcp.cli:run"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# The version comes from `git describe` (build_version.py): every commit on main gets its own.
 [tool.hatch.version]
-path = "src/fpgas_online_mcp/__init__.py"
+source = "code"
+path = "build_version.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/skills", "/build_version.py", "/README.md", "/LICENSE"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fpgas_online_mcp"]
@@ -39,3 +44,7 @@ dev = [
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+# Rebuild the editable install when the commit or tags change, so the version stays current.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "build_version.py" }, { git = { commit = true, tags = true } }]

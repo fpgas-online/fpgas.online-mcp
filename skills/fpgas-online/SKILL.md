@@ -64,4 +64,4 @@ Typical order: boards.md, in-use.md, then ssh.md or tinytapeout.md, power.md onl
 - Own ssh client: https://docs.fpgas.online/en/latest/user/own-ssh-client.html
 - Reset: https://docs.fpgas.online/en/latest/user/boards/reset.html
 
-When the `fpgas-online` MCP tools are present, prefer them (claims, shared connections, power-cycling). Agents without them can see who holds a board with the CLI that comes with the package (`uvx --from git+https://github.com/fpgas-online/fpgas.online-mcp fpgas-online claims`) or in the claims directory (`$XDG_STATE_HOME/fpgas-online/claims/`, by default `~/.local/state/fpgas-online/claims/`).
+When the `fpgas-online` MCP tools are present, prefer them (claims, shared connections, power-cycling). Agents without them can see who holds a board with the CLI that comes with the package (`uvx --from fpgas-online-mcp@latest fpgas-online claims`) or in the claims directory (`$XDG_STATE_HOME/fpgas-online/claims/`, by default `~/.local/state/fpgas-online/claims/`).

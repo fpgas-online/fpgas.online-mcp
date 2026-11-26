@@ -13,7 +13,12 @@ or administering the fpgas.online infrastructure.
 
 Stage 1 (the skill, `skills/fpgas-online/`) and stage 2 (the local MCP server
 `fpgas-online-mcp`, a shared broker process and the `fpgas-online` CLI) are
-written. Version 0.1.1. A hosted endpoint (stage 3) is not started.
+written. A hosted endpoint (stage 3) is not started.
+
+There are no releases to wait for: every push to `main` is published to
+[PyPI](https://pypi.org/project/fpgas-online-mcp/) as `fpgas-online-mcp`, numbered
+by `git describe` (`0.0.80` is the 80th commit after the `v0.0` tag on the first
+commit), and everything below runs the latest one.
 
 ## Install
 
@@ -26,21 +31,24 @@ Claude Code, local, as a plugin (the plugin carries the skill and, through
 /plugin install fpgas-online@fpgas-online
 ```
 
-The first launch of the plugin's MCP server builds a `.venv` inside the plugin
-directory (`uv` downloads the dependencies), which can take a while; if Claude
-Code reports that the server timed out while starting, raise `MCP_TIMEOUT`
-(milliseconds, for example `MCP_TIMEOUT=60000 claude`) or simply restart once
-the environment is built.
+The plugin starts the MCP server with `uvx fpgas-online-mcp@latest`, so each
+session runs the newest version on PyPI. The first launch downloads it and its
+dependencies, which can take a while; if Claude Code reports that the server
+timed out while starting, raise `MCP_TIMEOUT` (milliseconds, for example
+`MCP_TIMEOUT=60000 claude`) or simply restart once the download is done.
 
 Claude Code cloud sessions and other repositories: add the MCP server to the
 repository's `.mcp.json` (also needs `uv`):
 
 ```json
-{"mcpServers": {"fpgas-online": {"command": "uvx", "args": ["--from", "git+https://github.com/fpgas-online/fpgas.online-mcp", "fpgas-online-mcp"]}}}
+{"mcpServers": {"fpgas-online": {"command": "uvx", "args": ["fpgas-online-mcp@latest"]}}}
 ```
 
-This always runs the current `main` branch; there are no release tags or
-pinned versions to track. For the skill alone (no MCP), copy
+`@latest` makes `uvx` check PyPI for a newer version at every start (without it
+`uvx` keeps using the copy it cached first), so the server does not start when
+PyPI cannot be reached, even with a cached copy. Without `uvx`:
+`pip install -U fpgas-online-mcp` gives the `fpgas-online-mcp` and `fpgas-online`
+commands. For the skill alone (no MCP), copy
 `skills/fpgas-online` to `.claude/skills/fpgas-online/`.
 
 claude.ai: zip the `skills/fpgas-online` folder and upload the zip under
@@ -83,7 +91,7 @@ fpgas-online release CLAIM_ID
 fpgas-online broker status|stop
 ```
 
-Add `--json` for the raw result. Run it with `uvx --from git+https://github.com/fpgas-online/fpgas.online-mcp fpgas-online ...`
+Add `--json` for the raw result. Run it with `uvx --from fpgas-online-mcp@latest fpgas-online ...`
 or `uv run fpgas-online ...` in a checkout. `fpgas-online broker stop` stops
 the broker unless claims are live (it says who holds them) or another session
 is connected to it.
