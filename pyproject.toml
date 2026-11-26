@@ -24,7 +24,7 @@ source = "code"
 path = "build_version.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/skills", "/tests", "/build_version.py", "/README.md", "/LICENSE"]
+include = ["/src", "/skills", "/build_version.py", "/README.md", "/LICENSE"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fpgas_online_mcp"]
