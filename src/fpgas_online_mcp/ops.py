@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from . import guide, inuse, power
 from .boards import Board, BoardId, inventory, switch_port
 from .broker import Broker, Conn
-from .claims import Claim, ClaimConflict, ClaimStore
+from .claims import Claim, ClaimConflict, ClaimGone, ClaimStore
 from .protocol import BrokerError
 from .sites import SiteClient, SiteError
 from .ssh import PortMismatch, SshManager, defuse, wrap_untrusted
@@ -359,6 +359,12 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
         )
     except ClaimConflict as e:
         raise _conflict(e) from e
+    except ClaimGone as e:
+        raise BrokerError(
+            "no_claim",
+            f"{e}: {e.claim_id} on {board.id} ended before it could be renewed; call claim_board "
+            "without claim_id (it runs the in-use check again)",
+        ) from e
     except ValueError as e:
         raise BrokerError("bad_request", str(e)) from e
     state.conn_claims.setdefault(conn, set()).add(claim.claim_id)

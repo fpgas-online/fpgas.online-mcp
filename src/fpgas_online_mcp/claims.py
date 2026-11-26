@@ -69,6 +69,14 @@ class ClaimConflict(Exception):
         super().__init__(f"claimed by {existing.holder} until {until} ({existing.purpose})")
 
 
+class ClaimGone(Exception):
+    """A renewal named a claim that is no longer live (expired or released): it must not become a new claim."""
+
+    def __init__(self, claim_id: str):
+        self.claim_id = claim_id
+        super().__init__(f"claim {claim_id} expired; claim again")
+
+
 def _iso(t: datetime) -> str:
     return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -235,6 +243,9 @@ class ClaimStore:
                     raise ValueError(f"claim {claim_id} is for a different board ({known.board})")
             existing = self.for_board(board)
             await asyncio.sleep(0)  # yield point: only the locks make check-then-write safe
+            if existing is None and claim_id is not None:
+                # A fresh claim needs the caller's in-use check, which a renewal skipped.
+                raise ClaimGone(claim_id)
             if existing is not None:
                 if claim_id != existing.claim_id:
                     raise ClaimConflict(existing)

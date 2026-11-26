@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from fpgas_online_mcp.claims import Claim, ClaimConflict, ClaimStore
+from fpgas_online_mcp.claims import Claim, ClaimConflict, ClaimGone, ClaimStore
 
 BOARD = "welland:sw1-p1"
 
@@ -132,8 +132,18 @@ async def test_expiry_drops_claim_and_file(store, clock, tmp_path):
 async def test_expired_claim_id_cannot_renew_but_board_free(store, clock):
     c = await store.claim(BOARD, 30, "x", "a@h")
     clock.advance(minutes=31)
-    c2 = await store.claim(BOARD, 30, "x", "a@h", claim_id=c.claim_id)
-    assert c2.started == clock.now
+    with pytest.raises(ClaimGone, match="expired; claim again"):
+        await store.claim(BOARD, 30, "x", "a@h", claim_id=c.claim_id)
+    assert store.for_board(BOARD) is None  # no claim was created
+    c2 = await store.claim(BOARD, 30, "x", "a@h")
+    assert c2.started == clock.now and c2.claim_id != c.claim_id
+
+
+async def test_released_claim_id_cannot_renew(store):
+    c = await store.claim(BOARD, 30, "x", "a@h")
+    await store.release(c.claim_id)
+    with pytest.raises(ClaimGone):
+        await store.claim(BOARD, 30, "x", "a@h", claim_id=c.claim_id)
 
 
 async def test_survives_new_store(tmp_path, clock):

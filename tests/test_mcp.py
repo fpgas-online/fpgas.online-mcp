@@ -338,6 +338,22 @@ async def test_renewal_skips_in_use_check(stack):
         assert "claim_board" in err(await call(c, "claim_board", board="ps1:pi3", purpose="x", claim_id="c-bogus"))
 
 
+async def test_renewal_of_a_claim_that_ends_meanwhile_is_refused(stack, monkeypatch):
+    async with stack.session() as c:
+        first = ok(await call(c, "claim_board", board=WELLAND, purpose="a"))
+        store = stack.state.claims
+        real_claim = store.claim
+
+        async def expire_first(*a, **k):  # the claim ends between the broker's check and the store
+            await store.release(first["claim_id"])
+            return await real_claim(*a, **k)
+
+        monkeypatch.setattr(store, "claim", expire_first)
+        text = err(await call(c, "claim_board", board=WELLAND, purpose="b"))
+        assert "expired; claim again" in text and "in-use check" in text
+        assert store.for_board(WELLAND) is None and len(stack.inuse.calls) == 1
+
+
 async def test_tinytapeout_claim_records_state(stack):
     status = {"reachable": True, "kind": "fpga", "clients": 0, "idle_display": {"state": "loaded"}}
     stack.site.override[("tinytapeout.fpgas.online", "/board/fpga-2/status.json")] = httpx.Response(200, json=status)
