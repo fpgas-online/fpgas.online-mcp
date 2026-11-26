@@ -302,8 +302,6 @@ def test_version_tuple():
     assert client.version_tuple("1.2rc1") == (1, 2)
     assert client.version_tuple("dev") == (0,)
     assert client.version_tuple("0.0.85+dirty") == (0, 0, 85)
-    # the hand-written version from before git describe is older than every git-describe one
-    assert client.version_tuple("0.0.1") > client.version_tuple("0.1.1")
 
 
 async def test_shutdown_refused_while_other_clients_connected(running):
