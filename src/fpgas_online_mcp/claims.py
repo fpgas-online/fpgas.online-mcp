@@ -21,7 +21,7 @@ Format (all times ISO 8601 UTC, `Z` suffix):
 Mutations hold an flock on `claims/.lock` (cross-process) and an asyncio lock.
 Naive times in a hand-edited file are read as UTC.
 Expired claims are ignored and their file removed on read. A file that cannot
-be parsed is logged and ignored (never deleted). Whether a holder's front end
+be parsed is logged (once per modification time) and ignored (never deleted). Whether a holder's front end
 is currently connected is kept in memory only, never in the file.
 """
 
@@ -97,6 +97,7 @@ class ClaimStore:
         self._lock = asyncio.Lock()
         self._connected: set[str] = set()
         self._holding = False  # this process holds the flock
+        self._warned: set[tuple[str, int]] = set()  # (path, mtime_ns) of unreadable files already logged
 
     async def _acquire(self):
         """Take the cross-process flock, polling so the event loop is never blocked."""
@@ -171,12 +172,22 @@ class ClaimStore:
         except FileNotFoundError:
             return None
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
-            log.warning("ignoring unreadable claim file %s: %s", path, e)
+            self._warn_once(path, e)
             return None
         if claim.expires <= self._clock():
             self._drop_expired(path, claim.claim_id)
             return None
         return replace(claim, holder_connected=claim.holder in self._connected)
+
+    def _warn_once(self, path: Path, error: Exception) -> None:
+        """Log an unreadable file once per version of it (the broker reads every claim about once a second)."""
+        try:
+            key = (str(path), path.stat().st_mtime_ns)
+        except OSError:
+            key = (str(path), -1)
+        if key not in self._warned:
+            self._warned.add(key)
+            log.warning("ignoring unreadable claim file %s: %s", path, error)
 
     def _drop_expired(self, path: Path, claim_id: str) -> None:
         """Best-effort unlink, under the flock and only if the file is still that expired claim."""

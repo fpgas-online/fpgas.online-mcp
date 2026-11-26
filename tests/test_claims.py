@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import stat
 from datetime import UTC, datetime, timedelta
 
@@ -219,6 +220,22 @@ async def test_corrupt_file_ignored_not_deleted(store, tmp_path, caplog):
     # a corrupt file does not block claiming... it is replaced by the new claim
     c = await store.claim("ps1:pi1", 30, "z", "a@h")
     assert store.for_board("ps1:pi1") == c
+
+
+def test_corrupt_file_warned_once_per_mtime(store, tmp_path, caplog):
+    bad = tmp_path / "claims" / "ps1_pi1.json"
+    bad.parent.mkdir(parents=True)
+    bad.write_text("{not json")
+    with caplog.at_level(logging.WARNING):
+        for _ in range(5):
+            store.active_count()
+        assert caplog.text.count("ps1_pi1.json") == 1
+        st = bad.stat()
+        bad.write_text("{still not json")
+        os.utime(bad, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+        store.active_count()
+        store.active_count()
+        assert caplog.text.count("ps1_pi1.json") == 2
 
 
 async def test_tt_state_at_claim_set_and_kept(store):
