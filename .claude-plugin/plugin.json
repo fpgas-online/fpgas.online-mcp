@@ -2,5 +2,11 @@
   "name": "fpgas-online",
   "description": "Skill, MCP server and CLI for using the FPGA and Tiny Tapeout boards on fpgas.online: board lists, claims, shared ssh, power-cycling.",
   "version": "0.1.0",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "mcpServers": {
+    "fpgas-online": {
+      "command": "uv",
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--no-dev", "--frozen", "fpgas-online-mcp"]
+    }
+  }
 }

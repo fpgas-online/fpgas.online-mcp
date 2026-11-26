@@ -36,6 +36,14 @@ def test_plugin_manifest():
     assert manifest["license"] == "Apache-2.0"
 
 
+def test_plugin_declares_mcp_server():
+    server = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["mcpServers"]["fpgas-online"]
+    assert server["command"] == "uv"
+    assert server["args"] == ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--no-dev", "--frozen", "fpgas-online-mcp"]
+    # not in a root .mcp.json: that would also be a project config for anyone working on this repo
+    assert not (ROOT / ".mcp.json").exists()
+
+
 def test_marketplace_lists_plugin():
     marketplace = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
     assert len(marketplace["plugins"]) == 1

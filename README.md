@@ -18,8 +18,8 @@ written. Version 0.1.0. A hosted endpoint (stage 3) is not started.
 ## Install
 
 Claude Code, local, as a plugin (the plugin carries the skill and, through
-`.mcp.json`, the MCP server; it needs [`uv`](https://docs.astral.sh/uv/) on
-`PATH`):
+`mcpServers` in `.claude-plugin/plugin.json`, the MCP server; it needs
+[`uv`](https://docs.astral.sh/uv/) on `PATH`):
 
 ```
 /plugin marketplace add fpgas-online/fpgas.online-mcp

@@ -208,9 +208,10 @@ for the holder, while a human who arrives during the claim still stops it.
 
 - Python ≥3.12, `uv`. MCP front end on the official `mcp` SDK or FastMCP — the builder
   picks after checking current versions — pinned exactly. httpx for site calls.
-- The plugin's `.mcp.json` runs the front end from the plugin directory
-  (`uv run --project ${CLAUDE_PLUGIN_ROOT} fpgas-online-mcp`), so installing the plugin
-  installs the server.
+- The plugin manifest's `mcpServers` (`.claude-plugin/plugin.json`, not a root `.mcp.json`,
+  which would also act as a project config for contributors) runs the front end from the
+  plugin directory (`uv run --project ${CLAUDE_PLUGIN_ROOT} --no-dev --frozen
+  fpgas-online-mcp`: no dev tools, no re-lock), so installing the plugin installs the server.
 - For cloud sessions (or any repo), the README gives a repo-level `.mcp.json` entry that
   runs a tagged release straight from GitHub:
   `uvx --from git+https://github.com/fpgas-online/fpgas.online-mcp@vX.Y fpgas-online-mcp`.
