@@ -16,7 +16,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from . import guide, inuse, power
-from .boards import Board, BoardId, inventory
+from .boards import Board, BoardId, inventory, switch_port
 from .broker import Broker, Conn
 from .claims import Claim, ClaimConflict, ClaimStore
 from .protocol import BrokerError
@@ -188,6 +188,18 @@ async def _resolve(state: State, args: dict) -> Board:
     except ValueError as e:
         raise BrokerError("bad_board", str(e)) from e
     down = [f"{k} ({v})" for k, v in inv.notes.items() if v.startswith("unavailable")]
+    name = s.partition(":")[2]
+    if (
+        site == "ps1"
+        and not down
+        and switch_port("ps1", name)
+        and BoardId("ps1", name) not in {b.id for b in inv.boards}
+    ):
+        raise BrokerError(
+            "not_offered",
+            f"ps1:{name} is not offered by ps1 right now (ps1 lists only the hosts it offers: it may be rebooting "
+            "or taken on the website); try again later or pick another board",
+        )
     try:
         board_id = BoardId.parse(s, [b.id for b in inv.boards])
     except ValueError as e:

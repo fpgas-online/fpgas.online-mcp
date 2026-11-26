@@ -282,6 +282,9 @@ async def test_board_status(stack):
         # signals carry board text: joined and wrapped once as untrusted
         assert busy["in_use"]["signals"] == [f"{UNTRUSTED}board says: missing tool on host: ss</board-output>"]
         assert "list_boards" in err(await call(c, "board_status", board="welland:no-such-host"))
+        text = err(await call(c, "board_status", board="ps1:pi99"))  # a ps1 name the site does not list now
+        assert "not offered by ps1 right now" in text and "no such board" not in text
+        assert "no such board" in err(await call(c, "board_status", board="ps1:raspberry"))
 
 
 # --- claims --------------------------------------------------------------------------------------
