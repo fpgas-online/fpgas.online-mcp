@@ -41,6 +41,14 @@ def when(iso: str) -> str:
     return f"{day}{t:%H:%M} UTC"
 
 
+def when_epoch(ts: Any) -> str:
+    """A Unix timestamp (the broker's `started`) as `when` shows it; anything else as is."""
+    try:
+        return when(datetime.fromtimestamp(float(ts), UTC).isoformat())
+    except (TypeError, ValueError, OverflowError, OSError):
+        return str(ts)
+
+
 def table(headers: list[str], rows: list[list[str]]) -> str:
     cells = [headers, *rows]
     widths = [max(len(r[i]) for r in cells) for i in range(len(headers))]
@@ -185,7 +193,7 @@ async def _broker_cmd(args: argparse.Namespace) -> tuple[Any, str | None, int]:
     try:
         if args.action == "status":
             info = await c.call("ping")
-            text = f"running: version {info['version']}, pid {info['pid']}, started {info['started']}"
+            text = f"running: version {info['version']}, pid {info['pid']}, started {when_epoch(info['started'])}"
             if info.get("protocol", 1) != PROTOCOL:
                 text += (
                     f"\nthis CLI speaks protocol {PROTOCOL}, the broker {info.get('protocol', 1)}: board commands fail"

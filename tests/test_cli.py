@@ -99,7 +99,9 @@ async def test_errors_go_to_stderr(stack, capsys):
 
 async def test_broker_status_and_stop_idle(stack, capsys):
     code, out, _ = await cli(capsys, "broker", "status")
-    assert code == 0 and f"version {fpgas_online_mcp.__version__}" in out and "pid " in out and "started " in out
+    assert code == 0 and f"version {fpgas_online_mcp.__version__}" in out and "pid " in out
+    started = out.split("started ", 1)[1].splitlines()[0]
+    assert re.fullmatch(r"(\d{4}-\d\d-\d\d )?\d\d:\d\d UTC", started), started  # not a raw Unix timestamp
     code, out, _ = await cli(capsys, "broker", "status", "--json")
     assert json.loads(out)["version"] == fpgas_online_mcp.__version__
     code, out, _ = await cli(capsys, "broker", "stop")
@@ -191,3 +193,12 @@ async def test_oserror_is_an_error_line(no_broker, capsys, monkeypatch):
     monkeypatch.setattr("fpgas_online_mcp.cli.connect", boom)
     code, out, err = await cli(capsys, "boards")
     assert code == 1 and out == "" and err == "error: cannot spawn\n"
+
+
+def test_when_epoch():
+    from fpgas_online_mcp.cli import when_epoch
+
+    assert when_epoch(1_700_000_000) == "2023-11-14 22:13 UTC"  # a past day carries its date
+    assert when_epoch("1700000000.5") == "2023-11-14 22:13 UTC"
+    for bad in (None, "x", float("nan"), 1e30):
+        assert when_epoch(bad) == str(bad)
