@@ -41,7 +41,7 @@ def when(iso: str) -> str:
     return f"{day}{t:%H:%M} UTC"
 
 
-def when_epoch(ts) -> str:
+def when_epoch(ts: Any) -> str:
     """A Unix timestamp (the broker's `started`) as `when` shows it; anything else as is."""
     try:
         return when(datetime.fromtimestamp(float(ts), UTC).isoformat())
