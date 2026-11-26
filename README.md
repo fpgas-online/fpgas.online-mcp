@@ -26,6 +26,12 @@ Claude Code, local, as a plugin (the plugin carries the skill and, through
 /plugin install fpgas-online@fpgas-online
 ```
 
+The first launch of the plugin's MCP server builds a `.venv` inside the plugin
+directory (`uv` downloads the dependencies), which can take a while; if Claude
+Code reports that the server timed out while starting, raise `MCP_TIMEOUT`
+(milliseconds, for example `MCP_TIMEOUT=60000 claude`) or simply restart once
+the environment is built.
+
 Claude Code cloud sessions and other repositories: add the MCP server to the
 repository's `.mcp.json` (also needs `uv`):
 
@@ -132,8 +138,9 @@ network access below.
 
 ## Network access
 
-The skill talks to the sites over the network. In Claude Code cloud sessions
-the environment has a network allowlist that you configure; allow:
+The skill, the MCP server and its broker (and the `fpgas-online` CLI) all talk
+to the sites over the network. In Claude Code cloud sessions the environment has
+a network allowlist that you configure; allow:
 
 - HTTPS (443) to `welland.fpgas.online`, `ps1.fpgas.online`,
   `tinytapeout.fpgas.online` and `docs.fpgas.online`.
