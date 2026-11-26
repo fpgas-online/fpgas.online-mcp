@@ -7,7 +7,8 @@ import httpx
 import pytest
 from test_sites import FIX, client, clock, site  # noqa: F401  (fixtures)
 
-from fpgas_online_mcp.boards import BoardId, inventory, ssh_port, switch_port
+from fpgas_online_mcp.boards import TT_HOST_SITE, BoardId, inventory, ssh_port, switch_port, tt_host
+from fpgas_online_mcp.sites import SiteError
 
 
 def by_id(inv):
@@ -119,3 +120,26 @@ async def test_inventory_survives_registry_entries_that_are_not_objects(client, 
     site.override[("welland.fpgas.online", "/fleet/registry.json")] = httpx.Response(200, json=reg)
     inv = await inventory(client, "welland")
     assert "welland:pi-sw1-p2" in by_id(inv) and not inv.notes["welland"].startswith("unavailable")
+
+
+# --- the welland Pi of a Tiny Tapeout board ------------------------------------------------------
+
+
+async def test_tt_host_from_the_live_board_page(client, site):  # noqa: F811
+    assert await tt_host(client, "tt-ab2a48a7ee008dd9") == BoardId(TT_HOST_SITE, "pi-sw2-p11")
+    assert await tt_host(client, "tt-ab2a48a7ee008dd9") == BoardId("welland", "pi-sw2-p11")
+    assert site.count("/board/tt-ab2a48a7ee008dd9/") == 2  # read live every time: boards move between Pis
+
+
+@pytest.mark.parametrize(
+    ("port", "switch"), [("", ""), ("7", ""), ("", "2"), ("x", "2"), ("7", "0"), ("-7", "2"), ("7.0", "2"), ("٧", "2")]
+)
+async def test_tt_host_none_without_a_usable_switch_and_port(client, site, port, switch):  # noqa: F811
+    html = f'<html><div data-port="{port}" data-switch="{switch}"></div></html>'
+    site.override[("tinytapeout.fpgas.online", "/board/fpga-2/")] = httpx.Response(200, text=html)
+    assert await tt_host(client, "fpga-2") is None
+
+
+async def test_tt_host_site_error_propagates(client):  # noqa: F811
+    with pytest.raises(SiteError):
+        await tt_host(client, "tt06")  # no fixture: 404

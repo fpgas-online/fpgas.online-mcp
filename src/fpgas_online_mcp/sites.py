@@ -31,7 +31,15 @@ _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 class SiteError(Exception):
-    """A site could not be read or answered badly. The message names the site."""
+    """A site could not be read or answered badly. The message names the site.
+
+    `status` is the HTTP status when the site answered with one (a 404 says the page does not
+    exist, which callers treat differently from a site that is down), else None.
+    """
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -72,11 +80,19 @@ def _unique(items) -> list[str]:
     return list(dict.fromkeys(items))
 
 
-def _parse_ps1_hosts(data: bytes) -> list[str]:
+def _parse_hosts(pattern: str, data: bytes) -> list[str]:
     text = _text(data)
     if "</html>" not in text.lower():
         raise ValueError("not an HTML page")
-    return _unique(re.findall(r'href="(pi\d+)\.html"', text))
+    return _unique(re.findall(rf'href="({pattern})\.html"', text))
+
+
+def _parse_ps1_hosts(data: bytes) -> list[str]:
+    return _parse_hosts(r"pi\d+", data)
+
+
+def _parse_welland_hosts(data: bytes) -> list[str]:
+    return _parse_hosts(r"pi-sw\d+-p\d+", data)
 
 
 def _parse_tt_slugs(data: bytes) -> list[str]:
@@ -133,7 +149,7 @@ class SiteClient:
         except httpx.HTTPError as exc:
             raise SiteError(f"{site}: cannot reach the site ({type(exc).__name__})") from exc
         if resp.status_code != 200:
-            raise SiteError(f"{site}: HTTP {resp.status_code} for {path}")
+            raise SiteError(f"{site}: HTTP {resp.status_code} for {path}", status=resp.status_code)
         return resp.content
 
     async def _get(
@@ -163,6 +179,34 @@ class SiteClient:
 
     async def ps1_hosts(self, live: bool = False) -> tuple[list[str], Entry]:
         return await self._get("ps1", "/fpgas/", TTL_PS1_LIST_S, _parse_ps1_hosts, live)
+
+    async def welland_hosts(self, live: bool = False) -> tuple[list[str], Entry]:
+        """The Pis welland's `/fpgas/` page lists (offered, with a board that site shows), in page order."""
+        return await self._get("welland", "/fpgas/", TTL_PS1_LIST_S, _parse_welland_hosts, live)
+
+    async def site_password(self, site: str) -> str:
+        """The site-wide ssh password, from the page of the first Pi the site lists.
+
+        Every Pi of a site has the same login (the site publishes it on each listed Pi's page), so
+        this serves a Pi the site does not list, such as one that carries only a Tiny Tapeout board.
+        The page's own ssh port must match its own name, as for any board page. Never logged.
+        """
+        from .boards import ssh_port  # boards imports this module
+
+        listers = {"welland": self.welland_hosts, "ps1": self.ps1_hosts}
+        if site not in listers:
+            raise SiteError(f"{site}: no site-wide ssh password (this site has no ssh)")
+        hosts, _ = await listers[site]()
+        if not hosts:
+            raise SiteError(f"{site}: the /fpgas/ page lists no Pi, so there is no page to read the password from")
+        page = await self.board_page(site, hosts[0])
+        expected = ssh_port(site, hosts[0])
+        if not page.password or page.ssh_port is None or page.ssh_port != expected:
+            raise SiteError(
+                f"{site}: the page of {hosts[0]} gives ssh port {page.ssh_port} but its name means {expected}; "
+                "not using its password"
+            )
+        return page.password
 
     async def tt_slugs(self, live: bool = False) -> tuple[list[str], Entry]:
         return await self._get("tinytapeout", "/", TTL_TT_HOME_S, _parse_tt_slugs, live)

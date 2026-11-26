@@ -13,8 +13,12 @@ NOTES = {
     "tinytapeout": "catalogue; condition from status.json",
 }
 
+# Every Tiny Tapeout board is plugged into a Pi of this site; the board page names which one.
+TT_HOST_SITE = "welland"
+
 _WELLAND_NAME = re.compile(r"pi-sw([0-9]+)-p([0-9]+)")
 _PS1_NAME = re.compile(r"pi([0-9]+)")
+_POSITIVE = re.compile(r"[1-9][0-9]*")
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,21 @@ def ssh_port(site: str, name: str) -> int | None:
     if switch is None:
         return (100 + port) * 100 + 22
     return int(f"{switch}{port:02d}22") if switch > 0 and port < 100 else None
+
+
+async def tt_host(sites: SiteClient, slug: str) -> BoardId | None:
+    """The welland Pi a Tiny Tapeout board is plugged into, from its live board page; None when the page
+    names none (no Pi reports the board: it is not connected).
+
+    The page's switch and port come from the Pi's own registration; the Pi is `pi-sw<s>-p<p>`. Read
+    live every time: boards move between Pis, so the 1-day page cache could name the wrong Pi. A
+    SiteError propagates (the caller decides what an unreadable page means).
+    """
+    page = await sites.board_page("tinytapeout", slug, live=True)
+    switch, port = page.tt_switch or "", page.tt_port or ""
+    if not (_POSITIVE.fullmatch(switch) and _POSITIVE.fullmatch(port)):
+        return None
+    return BoardId(TT_HOST_SITE, f"pi-sw{switch}-p{port}")
 
 
 @dataclass(frozen=True)
