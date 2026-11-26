@@ -147,8 +147,9 @@ survive port moves where the site gives them: USB serial, board type, FPGA part.
   "in use"/"unknown" — unless the caller passes `override_reason`, which is recorded in the
   claim and shown to others.
 - One claim per Pi (2026-11-27, 2026-11-27-tt-boards-over-ssh-design.md): a Tiny Tapeout board's claim records the welland
-  Pi it is plugged into (`host`), and a claim on the board and one on that Pi exclude each
-  other.
+  Pi it was plugged into when claimed (`host`), and a claim on the board and one on that Pi
+  exclude each other. If the board moves, `connect`, `run` and `power_cycle` refuse
+  (`host_changed`) until the board is claimed again; claims are never re-keyed.
 
 ### Tools (8)
 

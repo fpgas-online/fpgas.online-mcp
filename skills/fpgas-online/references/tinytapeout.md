@@ -60,11 +60,12 @@ Log in to that host as to any welland host (ssh.md: port `<switch><2-digit port>
 welland Pi's, so use the password from any listed Pi's page (ssh.md). Live ssh to a chip
 board's Pi was not tried (2026-11-27); this follows from the site's code.
 
-On the Pi, the site's daemon drives the board (`board.device` in `status.json`). Stopping the
-daemon or opening that device yourself takes the board from the site's visitors: use the
-WebSocket below for serial, and run in-use.md's check first, as for any shared host. The MCP
-tools do this for you: `connect` and `run` on `tinytapeout:<slug>` find the Pi and say which
-(`host`), and a claim on the board also holds its Pi (and the other way round).
+Do not open the board's serial device yourself on the Pi; use the WebSocket below for serial.
+Run in-use.md's check first, as for any shared host. The MCP tools do this for you: `connect`
+and `run` on `tinytapeout:<slug>` find the Pi and say which (`host`). A claim on the board
+holds the Pi the board was on when it was claimed (and keeps other claims off that Pi); if
+the board moves to another Pi, `connect`, `run` and `power_cycle` refuse: release the claim
+and claim the board again, which checks the new Pi.
 
 ## Status and designs (read-only, run live)
 

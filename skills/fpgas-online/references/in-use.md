@@ -319,7 +319,8 @@ slug with no board `{"reachable":false,"clients":null,"idle":null}` (the respons
   with `TT`) is in use when that board is: the registry board's `id` is the board's USB serial
   (`board.usb_serial` in `status.json`), which finds its slug; apply the site rule as well as
   the ssh check. A web visitor on the Tiny Tapeout page then counts for the Pi too. A board
-  the Tiny Tapeout site does not list leaves only the ssh check: say so.
+  whose serial the Pi did not report, or that the Tiny Tapeout site does not list (read the
+  home page again first), cannot be checked for web visitors: unknown.
 
 Nothing is changed by these GETs; poll at most every 10 s.
 
