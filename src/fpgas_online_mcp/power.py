@@ -16,6 +16,7 @@ from . import inuse
 from .boards import Board, switch_port
 from .claims import Claim
 from .sites import SiteError
+from .ssh import RUN_SLACK_S
 
 POLL_S = 10.0
 GIVE_UP_S = 300.0
@@ -204,7 +205,8 @@ async def power_cycle(
             back = uptime is not None and uptime < clock() - t_toggle
             answered_same = uptime is not None and not back
         else:
-            probe_s = min(BOOT_ID_TIMEOUT_S, remaining)
+            # ssh.run waits RUN_SLACK_S past the remote timeout: keep the whole probe inside the cap.
+            probe_s = max(1.0, min(BOOT_ID_TIMEOUT_S, remaining - RUN_SLACK_S))
             new_id = await _ssh_boot_id(ssh, board, probe_s)
             if by_registry:
                 reg = await _registry_boot_id(board, sites)

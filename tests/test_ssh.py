@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import os
+import shlex
 import shutil
 import signal
 import stat
@@ -14,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from fpgas_online_mcp import ssh as ssh_mod
 from fpgas_online_mcp.boards import BoardId, ssh_port
 from fpgas_online_mcp.sites import BoardPage
 from fpgas_online_mcp.ssh import PortMismatch, SshManager, wrap_untrusted
@@ -202,8 +204,8 @@ async def test_run_timeout_kills(env):
     t = time.monotonic()
     pidfile = cfg.parent / "sleep.pid"
     r = await mgr.run(BOARD, f"echo started; sleep 30 & echo $! > {pidfile}; wait", 1)
-    assert time.monotonic() - t < 10
-    assert r.timed_out and r.exit_status is None
+    assert time.monotonic() - t < 5  # the host's timeout fired, not the local backstop
+    assert r.timed_out and r.remote_stopped and r.exit_status in (124, 137)
     assert "started" in r.output
     pid = int(pidfile.read_text())
     for _ in range(40):  # the whole process group is gone
@@ -214,6 +216,21 @@ async def test_run_timeout_kills(env):
         await asyncio.sleep(0.05)
     else:
         pytest.fail("remote sleep survived the timeout")
+
+
+async def test_run_wraps_command_in_remote_timeout(env):
+    mgr, sites, cfg, log = env
+    r = await mgr.run(BOARD, "echo 'it''s'; exit 124", 7)  # a command's own 124 is not a timeout
+    assert r.output == "its\n" and r.exit_status == 124 and not r.timed_out and not r.remote_stopped
+    argv = [e["argv"] for e in entries(log) if "--" in e["argv"]][-1]
+    assert argv[-1] == "timeout -k 5 7 sh -c " + shlex.quote("echo 'it''s'; exit 124")
+
+
+async def test_local_backstop_when_the_remote_timeout_does_not_report(env, monkeypatch):
+    mgr, *_ = env
+    monkeypatch.setattr(ssh_mod, "RUN_SLACK_S", -1.5)  # local kill fires before the remote timeout
+    r = await mgr.run(BOARD, "sleep 30", 2)
+    assert r.timed_out and not r.remote_stopped and r.exit_status is None
 
 
 async def test_no_tty_and_no_password_anywhere(env, caplog):

@@ -463,14 +463,22 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
         raise _ssh_error(board, e, "check board_status and retry later") from e
     budget = RUN_LIMIT - RUN_HEADER_RESERVE - len(wrap_untrusted("").encode())
     output, cut = _fit_bytes(defuse(r.output), budget)
-    return {
+    result = {
         "board": str(board.id),
         "exit_status": r.exit_status,
         "timed_out": r.timed_out,
         "truncated": r.truncated or cut,
         "as_of": _now(),
-        "output": wrap_untrusted(output),
     }
+    if r.remote_stopped:
+        result["note"] = f"the command was stopped on the host after {timeout_s} s"
+    elif r.timed_out:
+        result["note"] = (
+            "the command may still be running on the host (the host's timeout did not report back): check with "
+            "`ps` through run before releasing the claim"
+        )
+    result["output"] = wrap_untrusted(output)
+    return result
 
 
 async def op_power_cycle(state: State, args: dict, conn: Conn) -> dict:

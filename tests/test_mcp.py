@@ -23,6 +23,7 @@ from test_sites import Site
 
 import fpgas_online_mcp
 from fpgas_online_mcp import client, guide, mcp_server, ops, paths
+from fpgas_online_mcp import ssh as ssh_mod
 from fpgas_online_mcp.broker import SOCK_NAME, Broker, serve
 from fpgas_online_mcp.cache import Cache
 from fpgas_online_mcp.claims import ClaimStore
@@ -474,6 +475,17 @@ async def test_connect_refuses_a_page_port_that_disagrees_with_the_name(stack):
         text = err(await call(c, "connect", board=WELLAND))
         assert "10322" in text and "10222" in text and "not connecting" in text
         assert "not connecting" in err(await call(c, "run", board=WELLAND, command="true"))
+
+
+async def test_run_timeout_notes(stack, monkeypatch):
+    async with stack.session() as c:
+        ok(await call(c, "claim_board", board=WELLAND, purpose="test"))
+        stopped = ok(await call(c, "run", board=WELLAND, command="sleep 30", timeout_s=1), 8192)
+        assert stopped["timed_out"] is True and stopped["exit_status"] in (124, 137)
+        assert "stopped on the host after 1 s" in stopped["note"]
+        monkeypatch.setattr(ssh_mod, "RUN_SLACK_S", -0.5)  # the local backstop fires first
+        lost = ok(await call(c, "run", board=WELLAND, command="sleep 30", timeout_s=2), 8192)
+        assert lost["timed_out"] is True and "may still be running" in lost["note"]
 
 
 async def test_run_output_limit_and_wrapping(stack):

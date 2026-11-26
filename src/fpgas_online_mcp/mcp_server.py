@@ -251,7 +251,15 @@ def build_server(fe: Frontend) -> MCPServer:
         board: BoardArg,
         command: Annotated[str, Field(description="One non-interactive shell command, run on the board's host")],
         claim_id: ClaimArg = None,
-        timeout_s: Annotated[int, Field(ge=1, le=600, description="Kill the command after this many seconds")] = 60,
+        timeout_s: Annotated[
+            int,
+            Field(
+                ge=1,
+                le=600,
+                description="Stop the command on the host after this many seconds (exit status 124, or 137 "
+                "if it had to be killed)",
+            ),
+        ] = 60,
     ) -> CallToolResult:
         return await fe.tool(
             "run", limit=RUN_LIMIT, board=board, command=command, claim_id=claim_id, timeout_s=timeout_s

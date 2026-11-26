@@ -24,6 +24,12 @@ START_TIMEOUT_S = 30.0
 OP_TIMEOUT_S = 15.0
 GRACE_S = 5.0
 HEAD = TAIL = 4096
+# run() wraps the command in `timeout -k REMOTE_KILL_S <timeout_s>` on the host (without a tty, sshd
+# does not signal the remote command when the local client dies), and waits RUN_SLACK_S longer
+# locally, so the remote timeout normally fires first (exit 124, or 137 if it had to be killed).
+REMOTE_KILL_S = 5
+RUN_SLACK_S = REMOTE_KILL_S + 3
+REMOTE_TIMEOUT_EXITS = (124, 137)
 MAX_OUTPUT = HEAD + TAIL
 
 ASKPASS = """#!/bin/sh
@@ -60,6 +66,7 @@ class RunResult:
     output: str
     truncated: bool
     timed_out: bool
+    remote_stopped: bool = False  # timed out and the host's `timeout` ended the command
 
 
 def defuse(text: str) -> str:
@@ -302,6 +309,7 @@ class SshManager:
         if not command.strip():
             raise ValueError("command is empty")
         await self.ensure_master(board)
+        remote = f"timeout -k {REMOTE_KILL_S} {timeout_s:g} sh -c {shlex.quote(command)}"
         args = [
             *self._base(),
             "-o",
@@ -310,11 +318,15 @@ class SshManager:
             "ClearAllForwardings=yes",
             self.alias(board),
             "--",
-            command,
+            remote,
         ]
+        loop = asyncio.get_running_loop()
+        started = loop.time()
         code, timed_out, data = await self._supervise(
-            args, timeout_s, stdout=subprocess.PIPE, reader=self._read_bounded
+            args, timeout_s + RUN_SLACK_S, stdout=subprocess.PIPE, reader=self._read_bounded
         )
+        # 124/137 count as the remote timeout only once the time is up (a command may exit 124 itself).
+        remote_stopped = code in REMOTE_TIMEOUT_EXITS and loop.time() - started >= timeout_s - 0.1
         head, tail, total = data or (b"", b"", 0)
         output, truncated = clean_output(head, tail, total)
-        return RunResult(code, output, truncated, timed_out)
+        return RunResult(code, output, truncated, timed_out or remote_stopped, remote_stopped)
