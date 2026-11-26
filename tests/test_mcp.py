@@ -379,7 +379,8 @@ async def test_connect_and_run(stack):
         info = ok(await call(c, "connect", board=WELLAND))
         assert info["alias"] == "fpgas-welland-pi-sw1-p2"
         assert info["ssh"].startswith("ssh -F ") and info["scp"].startswith("scp -F ")
-        assert "Include" in info["include"]
+        assert "Include" in info["include"] and "at the top of ~/.ssh/config" in info["include"]
+        assert "30 minutes" in info["rules"] and "call connect again" in info["rules"]
         result = await call(c, "run", board=WELLAND, command="echo hello; exit 3")
         text = text_of(result, 8192)
         assert not result.is_error
