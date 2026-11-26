@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import tempfile
 from pathlib import Path
 
@@ -26,6 +27,14 @@ async def test_boards(stack, capsys):
     assert code == 0 and err == ""
     assert out.splitlines()[0].split() == ["BOARD", "TYPE", "CONDITION", "OFFERED", "SEEN", "CLAIM"]
     assert WELLAND in out and "welland:" in out and "as of 20" in out
+
+
+async def test_boards_condition(stack, capsys):
+    code, out, err = await cli(capsys, "boards", "--condition", "missing")
+    assert code == 0 and err == ""
+    board_rows = [re.split(r"  +", line) for line in out.splitlines()[1:] if re.match(r"\w+:\S+  ", line)]
+    assert board_rows and {r[2] for r in board_rows} == {"missing"}
+    assert WELLAND not in out  # pi-sw1-p2 is operational in the fixture
 
 
 async def test_boards_json(stack, capsys):

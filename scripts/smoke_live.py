@@ -48,8 +48,9 @@ async def inventory(c: BrokerClient) -> None:
     for site, info in sorted(r["sites"].items()):
         print(f"    {site}: {info.get('boards')} boards; {info.get('note')}; as_of {info.get('as_of')}")
     by_cond: dict[str, int] = {}
-    for b in r["boards"]:
-        by_cond[str(b.get("condition"))] = by_cond.get(str(b.get("condition")), 0) + 1
+    col = r["columns"].index("condition")
+    for row in r["boards"]:
+        by_cond[str(row[col])] = by_cond.get(str(row[col]), 0) + 1
     print(f"    conditions in the (possibly cut) list: {by_cond}")
     if r.get("more"):
         print(f"    {r['more']}")

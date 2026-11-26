@@ -151,7 +151,7 @@ survive port moves where the site gives them: USB serial, board type, FPGA part.
 | Tool | What it does | Annotations |
 | --- | --- | --- |
 | `guide(topic?)` | Summary of what fpgas.online offers and the sharing rules; with a topic (`boards`, `ssh`, `power`, `in-use`, `tinytapeout`), that reference's key points plus the docs links. Text comes from the skill files shipped in the package. | read-only |
-| `list_boards(site?, board_type?, include_offline=true)` | Merged inventory from cache: id, type, condition, offered, last_seen, local claim (holder, expiry), and `as_of` per site. Says per site how complete the list is. | read-only |
+| `list_boards(site?, condition?, board_type?, include_offline=true)` | Merged inventory from cache, one dense row per board `[id, type, condition, offered, last_seen]`, local claims by board id (holder, expiry), the conditions present, and `as_of` per site. Says per site how complete the list is. Its limit is 8 KB, so all three sites fit uncut. | read-only |
 | `board_status(board, check_use=true)` | One board in detail: inventory facts, local claim, and (if `check_use`) a live in-use check with its signals. | read-only |
 | `claim_board(board, minutes=30, purpose, override_reason?)` | Take or renew a claim (above). | not read-only, not destructive |
 | `release_board(claim_id)` | Release. | not read-only |

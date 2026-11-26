@@ -19,7 +19,7 @@ from pydantic import Field
 
 from . import __version__, client, paths
 from .client import BrokerClient, BrokerError
-from .ops import LIMIT, RUN_LIMIT, compact
+from .ops import LIMIT, LIST_LIMIT, RUN_LIMIT, compact
 from .ssh import wrap_untrusted
 
 NAME = "fpgas-online"
@@ -197,9 +197,23 @@ def build_server(fe: Frontend) -> MCPServer:
         board_type: Annotated[
             str | None, Field(description="Only boards whose type contains this, e.g. 'Fomu'")
         ] = None,
+        condition: Annotated[
+            str | None,
+            Field(
+                description="Only boards in this condition, e.g. 'missing', 'attention', 'operational' (welland), "
+                "'offered' (ps1), 'connected', 'not connected', 'unknown' (tinytapeout); the result lists them all"
+            ),
+        ] = None,
         include_offline: Annotated[bool, Field(description="Include missing / not connected boards")] = True,
     ) -> CallToolResult:
-        return await fe.tool("list_boards", site=site, board_type=board_type, include_offline=include_offline)
+        return await fe.tool(
+            "list_boards",
+            limit=LIST_LIMIT,
+            site=site,
+            board_type=board_type,
+            condition=condition,
+            include_offline=include_offline,
+        )
 
     async def board_status(
         board: BoardArg,
@@ -255,10 +269,11 @@ def build_server(fe: Frontend) -> MCPServer:
         ),
         (
             list_boards,
-            "List every board on fpgas.online, including offline ones: id, type, condition, offered, last_seen "
-            "and any local claim (holder, expiry, whether the holder is connected). Each site says how complete "
-            "its list is and when it was read (as_of). Long lists are cut: filter by site or board_type. Fast "
-            "(cached for up to a few minutes).",
+            "List every board on fpgas.online, including offline ones, one row per board: [id, type, condition, "
+            "offered, last_seen] (see columns), plus local claims by board id (holder, expiry, whether the holder "
+            "is connected). Each site says how complete its list is and when it was read (as_of); conditions "
+            "lists the values to filter on. Filter by site, condition (e.g. 'missing') or board_type; a list "
+            "longer than 8 KB is cut and says so. Fast (cached for up to a few minutes).",
             _hints(True, True, True, title="List boards"),
         ),
         (

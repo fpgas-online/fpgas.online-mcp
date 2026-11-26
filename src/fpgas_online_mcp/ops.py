@@ -26,6 +26,8 @@ from .ssh import PortMismatch, SshManager, defuse, wrap_untrusted
 log = logging.getLogger(__name__)
 
 LIMIT = 4096
+LIST_LIMIT = 8192  # list_boards: one site (welland ~46 boards) and most of all three fit uncut
+LIST_COLUMNS = ["id", "type", "condition", "offered", "last_seen"]
 SSH_DETAIL_LIMIT = 1024
 RUN_LIMIT = 8192
 RUN_HEADER_RESERVE = 512  # room for the run result's other fields next to the output
@@ -226,9 +228,15 @@ def _claim_for(state: State, board: Board, args: dict, conn: Conn) -> Claim:
 # --- ops ------------------------------------------------------------------------------------------
 
 
+def _row(b: Board) -> list:
+    """One dense list_boards row in LIST_COLUMNS order (stale is a site-level flag)."""
+    return [str(b.id), b.type, b.condition, b.offered, _short(b.last_seen)]
+
+
 async def op_list_boards(state: State, args: dict, conn: Conn) -> dict:
     site = _str(args, "site")
     board_type = (_str(args, "board_type") or "").lower()
+    condition = (_str(args, "condition") or "").lower()
     include_offline = args.get("include_offline", True) is not False
     try:
         inv = await inventory(state.sites, site)
@@ -244,23 +252,30 @@ async def op_list_boards(state: State, args: dict, conn: Conn) -> dict:
         if any(b.stale for b in mine):
             info["stale"] = True
         sites[s] = info
-    boards = [
-        _board_view(b, claims.get(str(b.id)), conn)
+    chosen = [
+        b
         for b in inv.boards
-        if (include_offline or b.condition not in OFFLINE) and board_type in (b.type or "").lower()
+        if (include_offline or b.condition not in OFFLINE)
+        and board_type in (b.type or "").lower()
+        and (not condition or b.condition.lower() == condition)
     ]
+    conditions = sorted({b.condition for b in inv.boards})
 
     def build(n: int) -> dict:
-        result = {"sites": sites, "boards": boards[:n]}
-        if n < len(boards):
-            result["more"] = f"… {len(boards) - n} more boards not shown; filter with site or board_type"
+        shown = chosen[:n]
+        result = {"sites": sites, "conditions": conditions, "columns": LIST_COLUMNS, "boards": [_row(b) for b in shown]}
+        mine = {str(b.id): _claim_view(claims[str(b.id)], conn) for b in shown if str(b.id) in claims}
+        if mine:
+            result["claims"] = mine
+        if n < len(chosen):
+            result["more"] = f"… {len(chosen) - n} more boards not shown; filter with site, condition or board_type"
         return result
 
     # Too long: keep as many boards as fit (binary search), then say how many were left out.
-    lo, hi = 0, len(boards)
+    lo, hi = 0, len(chosen)
     while lo < hi:
         mid = (lo + hi + 1) // 2
-        if _size(build(mid)) <= LIMIT:
+        if _size(build(mid)) <= LIST_LIMIT:
             lo = mid
         else:
             hi = mid - 1

@@ -62,8 +62,10 @@ def _claim_text(c: dict) -> str:
 
 def fmt_boards(r: dict) -> str:
     rows = []
-    for b in r["boards"]:
-        claim = b.get("claim")
+    claims = r.get("claims", {})
+    for row in r["boards"]:
+        b = dict(zip(r["columns"], row, strict=True))
+        claim = claims.get(b["id"])
         rows.append(
             [
                 b["id"],
@@ -148,7 +150,7 @@ async def _broker_op(args: argparse.Namespace) -> tuple[Any, Any]:
     try:
         match args.cmd:
             case "boards":
-                kw = {"site": args.site} if args.site else {}
+                kw = {k: v for k, v in (("site", args.site), ("condition", args.condition)) if v}
                 return await c.call("list_boards", **kw), fmt_boards
             case "status":
                 return await c.call("board_status", board=args.board), fmt_status
@@ -216,7 +218,9 @@ def _parser() -> argparse.ArgumentParser:
         sp.add_argument("--json", action="store_true", help="print the broker's raw result as JSON")
         return sp
 
-    add("boards", "list boards").add_argument("--site", help="only this site")
+    sp = add("boards", "list boards")
+    sp.add_argument("--site", help="only this site")
+    sp.add_argument("--condition", help="only boards in this condition, e.g. missing, attention, 'not connected'")
     add("status", "one board's details and in-use verdict").add_argument("board", help="e.g. welland:pi-sw1-p2")
     add("claims", "list live claims")
     sp = add("claim", "claim a board")

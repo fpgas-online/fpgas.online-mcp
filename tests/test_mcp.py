@@ -216,29 +216,56 @@ def test_guide_reads_shipped_skill_files():
 # --- list_boards and board_status ----------------------------------------------------------------
 
 
+def rows(listed):
+    return [dict(zip(listed["columns"], row, strict=True)) for row in listed["boards"]]
+
+
 async def test_list_boards(stack):
     async with stack.session() as c:
-        everything = ok(await call(c, "list_boards"))
+        everything = ok(await call(c, "list_boards"), 8192)
         assert set(everything["sites"]) == {"welland", "ps1", "tinytapeout"}
         for info in everything["sites"].values():
             assert info["note"] and info["as_of"]
         assert "absence says nothing" in everything["sites"]["ps1"]["note"]
-        assert "more" in everything and "filter" in everything["more"]  # 80+ boards do not fit in 4 KB
+        assert "more" not in everything and len(everything["boards"]) == sum(
+            i["boards"] for i in everything["sites"].values()
+        )
+        assert everything["columns"] == ["id", "type", "condition", "offered", "last_seen"]
+        assert {"missing", "attention", "operational", "offered", "not connected"} <= set(everything["conditions"])
 
-        welland = ok(await call(c, "list_boards", site="welland"))
+        welland = ok(await call(c, "list_boards", site="welland"), 8192)
         assert set(welland["sites"]) == {"welland"}
-        ids = {b["id"] for b in welland["boards"]}
+        assert "more" not in welland and len(welland["boards"]) == welland["sites"]["welland"]["boards"]
+        ids = {b["id"] for b in rows(welland)}
         assert WELLAND in ids
-        conditions = {b["condition"] for b in welland["boards"]}
+        conditions = {b["condition"] for b in rows(welland)}
         assert "missing" in conditions
 
-        online = ok(await call(c, "list_boards", site="welland", include_offline=False))
-        assert "missing" not in {b["condition"] for b in online["boards"]}
+        online = ok(await call(c, "list_boards", site="welland", include_offline=False), 8192)
+        assert "missing" not in {b["condition"] for b in rows(online)}
+
+        missing = ok(await call(c, "list_boards", condition="Missing"))
+        assert missing["boards"] and {b["condition"] for b in rows(missing)} == {"missing"}
+        assert "more" not in missing
+        tt_down = ok(await call(c, "list_boards", site="tinytapeout", condition="not connected"))
+        assert tt_down["boards"] and {b["condition"] for b in rows(tt_down)} == {"not connected"}
+        assert ok(await call(c, "list_boards", condition="nonsense"))["boards"] == []
 
         fomu = ok(await call(c, "list_boards", board_type="fomu"))
-        assert fomu["boards"] and all("fomu" in b["type"].lower() for b in fomu["boards"])
+        assert fomu["boards"] and all("fomu" in b["type"].lower() for b in rows(fomu))
 
         err(await call(c, "list_boards", site="nowhere"))
+
+
+async def test_list_boards_cut_at_8_kb(stack, monkeypatch):
+    monkeypatch.setattr(ops, "LIST_LIMIT", 2048)
+    async with stack.session() as c:
+        cut = ok(await call(c, "list_boards", site="welland"), 8192)
+    assert "more" in cut and "condition" in cut["more"] and len(compact_size(cut)) <= 2048
+
+
+def compact_size(obj):
+    return ops.compact(obj).encode()
 
 
 async def test_board_status(stack):
@@ -271,7 +298,7 @@ async def test_claim_refused_when_in_use_then_override(stack):
         assert claim["override_reason"] == "Tim said so" and claim["in_use"]["verdict"] == "in use"
     async with stack.session("other:2@host") as other:
         listed = ok(await call(other, "list_boards", site="welland"))
-        mine = next(b for b in listed["boards"] if b["id"] == WELLAND)["claim"]
+        mine = listed["claims"][WELLAND]
         assert mine["override_reason"] == "Tim said so"
 
 
@@ -291,7 +318,7 @@ async def test_claim_conflict_and_claim_id_visibility(stack):
         assert seen_by_you["holder"] == "me:1@host"
         assert seen_by_you["holder_connected"] is True
         listed = ok(await call(you, "list_boards", site="welland"))
-        listed_claim = next(b for b in listed["boards"] if b["id"] == WELLAND)["claim"]
+        listed_claim = listed["claims"][WELLAND]
         assert listed_claim["claim_id"] == claim["claim_id"] and "yours" not in listed_claim
 
 

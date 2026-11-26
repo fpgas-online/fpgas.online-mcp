@@ -47,7 +47,7 @@ verified), so expect only the HTTPS parts to work there.
 | Tool | What it does |
 | --- | --- |
 | `guide` | The skill text: sites, sharing rules, topics |
-| `list_boards` | All boards of all sites, with condition, last seen and local claims |
+| `list_boards` | All boards of all sites, one dense row each (condition, last seen) plus local claims; filter by site, condition or type |
 | `board_status` | One board's facts and the live in-use check (idle / in use / unknown) |
 | `claim_board` | Claim a board (30 min default, 240 max); runs the in-use check first; renews with `claim_id` |
 | `release_board` | Release a claim |
@@ -69,7 +69,7 @@ clients may have shorter limits.
 and for agents without MCP:
 
 ```
-fpgas-online boards [--site SITE]
+fpgas-online boards [--site SITE] [--condition CONDITION]
 fpgas-online status BOARD
 fpgas-online claims
 fpgas-online claim BOARD --purpose TEXT [--minutes N] [--override-reason TEXT]
