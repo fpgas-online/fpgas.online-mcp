@@ -15,7 +15,7 @@ from typing import Any
 
 from . import __version__
 from .paths import cache_dir, runtime_dir, state_dir
-from .protocol import MAX_LINE, BrokerError, decode, encode, error_response
+from .protocol import MAX_LINE, PROTOCOL, BrokerError, decode, encode, error_response
 
 SOCK_NAME = "broker.sock"
 log = logging.getLogger("fpgas_online_mcp.broker")
@@ -40,6 +40,9 @@ class Broker:
         self.clock = clock
         self.active_claims = active_claims
         self.version = __version__
+        self.protocol = PROTOCOL
+        self.conns: set[Conn] = set()  # connected clients
+        self.in_flight = 0  # requests being handled
         self.started = time.time()
         self.on_connect: Callable[[Conn], None] | None = None
         self.on_disconnect: Callable[[Conn], None] | None = None
@@ -56,11 +59,17 @@ class Broker:
         self._stop.set()
 
     async def _ping(self, args: dict, conn: Conn) -> dict:
-        return {"version": self.version, "pid": os.getpid(), "started": self.started}
+        return {"version": self.version, "protocol": self.protocol, "pid": os.getpid(), "started": self.started}
 
     async def _shutdown_if_idle(self, args: dict, conn: Conn) -> dict:
+        """Stop after replying, unless claims exist, another client is connected or another request runs."""
+        others = len(self.conns - {conn})
         if self.active_claims() > 0:
             raise BrokerError("busy", "the broker has active claims")
+        if others:
+            raise BrokerError("busy", f"{others} other client(s) are connected to the broker")
+        if self.in_flight > 1:  # this request is one of them
+            raise BrokerError("busy", "the broker is handling other requests")
         self._stop_after_response = True
         return {"stopping": True}
 
@@ -76,6 +85,7 @@ class Broker:
         handler = self._handlers.get(op)
         if handler is None:
             return error_response(req_id, "unknown_op", f"unknown op {op!r}")
+        self.in_flight += 1
         try:
             result = await handler(args, conn)
         except BrokerError as e:
@@ -83,6 +93,8 @@ class Broker:
         except Exception:
             log.exception("handler for op %r failed", op)
             return error_response(req_id, "internal", "internal error; see the broker log")
+        finally:
+            self.in_flight -= 1
         return {"id": req_id, "ok": True, "result": result}
 
 
@@ -105,6 +117,7 @@ async def _serve_conn(
         return
     conn = Conn()
     writers.add(writer)
+    broker.conns.add(conn)
     if broker.on_connect:
         broker.on_connect(conn)
     try:
@@ -130,6 +143,7 @@ async def _serve_conn(
         pass
     finally:
         writers.discard(writer)
+        broker.conns.discard(conn)
         if broker.on_disconnect:
             broker.on_disconnect(conn)
         writer.close()

@@ -97,6 +97,16 @@ async def test_broker_stop_busy(stack, capsys):
     assert code == 1 and json.loads(out)["stopping"] is False
 
 
+async def test_broker_stop_refused_while_a_session_is_connected(stack, capsys):
+    async with stack.session() as c:
+        await c.call_tool("guide", {})  # the session's pooled connection stays open
+        code, out, _ = await cli(capsys, "broker", "stop")
+    assert code == 1 and "busy" in out and "other client" in out
+    await asyncio.sleep(0.1)
+    code, out, _ = await cli(capsys, "broker", "stop")  # the CLI is the only client now
+    assert code == 0 and out.strip() == "stopped"
+
+
 @pytest.fixture
 def no_broker(monkeypatch):
     REPO_TMP.mkdir(exist_ok=True)
@@ -133,6 +143,12 @@ async def test_broker_version_mismatch(stack, capsys):
     assert code == 0 and "running" in out
     code, out, _ = await cli(capsys, "broker", "stop")
     assert code == 0 and out.strip() == "stopped"
+
+
+async def test_broker_status_newer_broker(stack, capsys):
+    stack.broker.version = "99.0.0"
+    code, out, _ = await cli(capsys, "broker", "status")
+    assert code == 0 and "version 99.0.0" in out and "uses the running (newer) broker" in out
 
 
 async def test_minutes_out_of_range(stack, capsys):

@@ -119,8 +119,9 @@ or by reading those files.
 ## Stopping the broker
 
 One broker per user serves all sessions and exits when idle. Stop it with
-`fpgas-online broker stop` (refused while claims are live). A client of another
-version replaces an idle broker automatically.
+`fpgas-online broker stop` (refused while claims are live or another session is
+connected). A newer client replaces an older broker once it is idle; until then,
+and for older clients, sessions of different versions share the running broker.
 
 ## Sandbox
 

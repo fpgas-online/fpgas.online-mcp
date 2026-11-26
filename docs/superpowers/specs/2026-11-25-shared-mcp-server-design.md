@@ -111,9 +111,13 @@ It is for people and agents who use the boards, not for running the infrastructu
 - **Start-up**: the front end connects; if there is no socket it takes an `flock` on
   `broker.lock`, starts the broker detached (`setsid`), and waits up to 5 s for the socket.
   Two sessions starting at once therefore start one broker.
-- **Version**: the broker reports its package version. On mismatch the front end asks it to
-  restart, which it does only when it holds no active claims; otherwise the call returns an
-  error saying so. The broker exits after 30 minutes with no connected front ends and no
+- **Version**: the broker reports its package version and an integer `protocol` (1 now; it
+  changes only when the wire format does). Only a client newer than the broker (versions
+  compared as tuples of ints) asks it to restart, which it does only when it holds no active
+  claims, no other client is connected and no other request is in flight; while it is busy,
+  and whenever the client is older, the client uses the running broker. Only a different
+  `protocol` is an error. So two versions running side by side never take turns replacing
+  each other's broker. The broker exits after 30 minutes with no connected front ends and no
   claims (ssh masters keep their own `ControlPersist` lifetime).
 
 ### Board identity

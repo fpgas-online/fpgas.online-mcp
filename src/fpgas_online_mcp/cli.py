@@ -10,7 +10,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import __version__
-from .client import BrokerClient, BrokerError, connect
+from .client import BrokerClient, BrokerError, connect, version_tuple
+from .protocol import PROTOCOL
 
 __all__ = ["main", "run"]
 
@@ -179,10 +180,16 @@ async def _broker_cmd(args: argparse.Namespace) -> tuple[Any, str | None, int]:
         if args.action == "status":
             info = await c.call("ping")
             text = f"running: version {info['version']}, pid {info['pid']}, started {info['started']}"
-            if info["version"] != __version__:
+            if info.get("protocol", 1) != PROTOCOL:
+                text += (
+                    f"\nthis CLI speaks protocol {PROTOCOL}, the broker {info.get('protocol', 1)}: board commands fail"
+                )
+            elif version_tuple(__version__) > version_tuple(info["version"]):
                 text += (
                     f"\nthis CLI is version {__version__}: the next board command replaces the broker once it is idle"
                 )
+            elif info["version"] != __version__:
+                text += f"\nthis CLI is version {__version__}: it uses the running (newer) broker"
             return info, text, 0
         try:
             result = await c.call("shutdown_if_idle")
@@ -190,11 +197,11 @@ async def _broker_cmd(args: argparse.Namespace) -> tuple[Any, str | None, int]:
             if e.code != "busy":
                 raise
             claims = (await c.call("claims"))["claims"]
-            held = sorted({c["holder"] for c in claims})
-            text = f"not stopped: the broker is busy; claim holders: {', '.join(held)}\n" + fmt_claims(
-                {"claims": claims}
-            )
-            return {"stopping": False, "claims": claims}, text, 1
+            text = f"not stopped: the broker is busy ({e.message})"
+            if claims:
+                held = sorted({c["holder"] for c in claims})
+                text += f"; claim holders: {', '.join(held)}\n" + fmt_claims({"claims": claims})
+            return {"stopping": False, "reason": e.message, "claims": claims}, text, 1
         return result, "stopped", 0
     finally:
         await c.close()

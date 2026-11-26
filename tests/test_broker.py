@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from fpgas_online_mcp import __version__, client, paths
-from fpgas_online_mcp.broker import SOCK_NAME, Broker, serve
+from fpgas_online_mcp.broker import SOCK_NAME, Broker, Conn, serve
 from fpgas_online_mcp.client import BrokerError
 
 REPO_TMP = Path(__file__).resolve().parent.parent / "tmp"
@@ -79,7 +79,7 @@ async def test_ping_roundtrip(running):
     broker, _ = running
     c = await client.connect("me@host", spawn=False)
     info = await c.call("ping")
-    assert info["version"] == __version__
+    assert info["version"] == __version__ and info["protocol"] == 1
     assert info["pid"] == os.getpid()
     await c.close()
 
@@ -221,15 +221,117 @@ async def test_version_mismatch_restarts_when_idle(env):
     await c.close()
 
 
-async def test_version_mismatch_refused_with_claims(env):
+async def test_older_broker_with_claims_is_used(env):
     old = await _old_broker(env, 1)
-    with pytest.raises(BrokerError) as e:
-        await client.connect("a@h")
-    assert e.value.code == "version" and "0.0.1" in e.value.message
+    c = await client.connect("a@h")
+    assert c.broker_version == "0.0.1" and (await c.call("ping"))["pid"] == os.getpid()
     assert not old.done()
+    await c.close()
     old.cancel()
     with pytest.raises(asyncio.CancelledError):
         await old
+
+
+async def test_older_broker_with_other_client_is_kept(env):
+    old = await _old_broker(env, 0)
+    other = await client.connect("old@h", spawn=False)  # an old session's open connection
+    c = await client.connect("new@h")
+    assert c.broker_version == "0.0.1"
+    assert (await other.call("ping"))["pid"] == os.getpid()  # the old session still works
+    assert not old.done()
+    await other.close()
+    await c.close()
+    old.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await old
+
+
+async def test_newer_broker_is_used_not_replaced(env):
+    sock = paths.runtime_dir() / SOCK_NAME
+    broker = Broker()
+    broker.version = "99.0.0"
+    task = asyncio.create_task(serve(sock, broker))
+    await _wait_for_sock(sock)
+    c = await client.connect("a@h")
+    assert c.broker_version == "99.0.0" and (await c.call("ping"))["pid"] == os.getpid()
+    await c.close()
+    assert not task.done()
+    broker.stop()
+    await task
+
+
+async def test_protocol_mismatch_refused(env):
+    sock = paths.runtime_dir() / SOCK_NAME
+    broker = Broker()
+    broker.version, broker.protocol = "99.0.0", 2
+    task = asyncio.create_task(serve(sock, broker))
+    await _wait_for_sock(sock)
+    with pytest.raises(BrokerError) as e:
+        await client.connect("a@h")
+    assert e.value.code == "protocol" and "99.0.0" in e.value.message and "protocol 2" in e.value.message
+    assert not task.done()
+    broker.stop()
+    await task
+
+
+async def test_two_versions_alternate_without_restarts(env, monkeypatch):
+    """An old and a new front end take turns: neither replaces the broker the other is using."""
+    sock = paths.runtime_dir() / SOCK_NAME
+    broker = Broker()  # the current version
+    task = asyncio.create_task(serve(sock, broker))
+    await _wait_for_sock(sock)
+    new = await client.connect("new@h")
+    for _ in range(3):
+        monkeypatch.setattr(client, "__version__", "0.0.1")
+        old = await client.connect("old@h")
+        monkeypatch.setattr(client, "__version__", __version__)  # not undo(): that would drop env's XDG dirs
+        assert old.broker_version == __version__
+        assert (await old.call("ping"))["pid"] == os.getpid()
+        assert (await new.call("ping"))["pid"] == os.getpid()
+        await old.close()
+    assert not task.done()
+    await new.close()
+    broker.stop()
+    await task
+
+
+def test_version_tuple():
+    assert client.version_tuple("0.10.2") > client.version_tuple("0.9.9")
+    assert client.version_tuple("1.0") == (1, 0)
+    assert client.version_tuple("1.2rc1") == (1, 2)
+    assert client.version_tuple("dev") == (0,)
+
+
+async def test_shutdown_refused_while_other_clients_connected(running):
+    broker, _ = running
+    a = await client.connect("a@h", spawn=False)
+    b = await client.connect("b@h", spawn=False)
+    with pytest.raises(BrokerError) as e:
+        await a.call("shutdown_if_idle")
+    assert e.value.code == "busy" and "other client" in e.value.message
+    await b.close()
+    await asyncio.sleep(0.1)
+    assert await a.call("shutdown_if_idle") == {"stopping": True}
+    await a.close()
+
+
+async def test_shutdown_refused_while_requests_in_flight():
+    broker = Broker()
+    gate = asyncio.Event()
+
+    async def slow(args, conn):
+        await gate.wait()
+        return "done"
+
+    broker.register("slow", slow)
+    a, b = Conn(), Conn()
+    t = asyncio.create_task(broker.dispatch({"id": 1, "op": "slow"}, a))
+    await asyncio.sleep(0)
+    resp = await broker.dispatch({"id": 2, "op": "shutdown_if_idle"}, b)
+    assert resp["error"]["code"] == "busy" and "other requests" in resp["error"]["message"]
+    gate.set()
+    assert (await t)["result"] == "done"
+    assert (await broker.dispatch({"id": 3, "op": "shutdown_if_idle"}, b))["ok"] is True
 
 
 async def test_shutdown_keeps_successor_socket(env):

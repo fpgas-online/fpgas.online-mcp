@@ -12,9 +12,9 @@ from typing import Any
 
 from . import __version__
 from .paths import runtime_dir, state_dir
-from .protocol import MAX_LINE, BrokerError, decode, encode
+from .protocol import MAX_LINE, PROTOCOL, BrokerError, decode, encode
 
-__all__ = ["BrokerClient", "BrokerError", "connect"]
+__all__ = ["BrokerClient", "BrokerError", "connect", "version_tuple"]
 
 START_TIMEOUT_S = 5.0
 POLL_S = 0.05
@@ -29,6 +29,7 @@ class BrokerClient:
         self._lock = asyncio.Lock()
         self._broken = False
         self.broker_version: str | None = None  # set by connect()
+        self.broker_protocol: int | None = None  # set by connect()
 
     @property
     def broken(self) -> bool:
@@ -96,15 +97,19 @@ _DETACH = (
 
 
 def _spawn() -> None:
-    with open(state_dir() / "broker.log", "ab") as log:
-        subprocess.run(
-            [sys.executable, "-c", _DETACH],
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
-            cwd="/",
-            check=True,
-        )
+    log_path = state_dir() / "broker.log"
+    try:
+        with open(log_path, "ab") as log:
+            subprocess.run(
+                [sys.executable, "-c", _DETACH],
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                cwd="/",
+                check=True,
+            )
+    except subprocess.CalledProcessError as e:
+        raise BrokerError("start_failed", f"could not start the broker (exit {e.returncode}); see {log_path}") from e
 
 
 async def _start(holder: str) -> BrokerClient:
@@ -145,8 +150,38 @@ async def _wait_gone() -> None:
         await asyncio.sleep(POLL_S)
 
 
+def version_tuple(version: str) -> tuple[int, ...]:
+    """'0.10.2' -> (0, 10, 2); each part counts by its leading digits ('1rc2' -> 1, 'dev' -> 0)."""
+    parts = []
+    for part in version.split("."):
+        digits = len(part) - len(part.lstrip("0123456789"))
+        parts.append(int(part[:digits]) if digits else 0)
+    return tuple(parts)
+
+
+async def _identify(client: BrokerClient) -> BrokerClient:
+    info = await client.call("ping")
+    client.broker_version = str(info["version"])
+    client.broker_protocol = int(info.get("protocol", 1))  # brokers before the field speak protocol 1
+    return client
+
+
+def _protocol_error(client: BrokerClient) -> BrokerError:
+    return BrokerError(
+        "protocol",
+        f"the running broker is version {client.broker_version} (protocol {client.broker_protocol}) but this "
+        f"client is {__version__} (protocol {PROTOCOL}); they cannot talk to each other. Update or restart "
+        "the older fpgas-online sessions, or wait until the broker is idle",
+    )
+
+
 async def connect(holder: str, spawn: bool = True) -> BrokerClient:
-    """Connect to the broker, starting it if needed and replacing one of a different version.
+    """Connect to the broker, starting it if needed.
+
+    A client newer than the broker asks it to stop when it is idle (no claims, no other clients, no
+    other requests) and starts its own; when the broker is busy, or not older, the client uses it as
+    long as both speak the same protocol. Versions are compared as tuples of ints, so two versions
+    never take turns replacing each other's broker.
 
     With spawn=False nothing is started or stopped; `client.broker_version` says what is running.
     """
@@ -155,22 +190,22 @@ async def connect(holder: str, spawn: bool = True) -> BrokerClient:
         if not spawn:
             raise BrokerError("not_running", "the broker is not running")
         client = await _start(holder)
-    info = await client.call("ping")
-    client.broker_version = info["version"]
-    if info["version"] == __version__ or not spawn:
+    await _identify(client)
+    if not spawn:
         return client  # without spawn a client never shuts a broker down (the CLI inspects/stops it)
-    old = info["version"]
-    try:
-        await client.call("shutdown_if_idle")
-    except BrokerError as e:
+    if version_tuple(__version__) > version_tuple(client.broker_version):
+        try:
+            await client.call("shutdown_if_idle")
+        except BrokerError as e:
+            if e.code != "busy":
+                await client.close()
+                raise
+            # Busy: keep using the older broker; it restarts when it is idle and someone newer connects.
+        else:
+            await client.close()
+            await _wait_gone()
+            client = await _identify(await _start(holder))
+    if client.broker_protocol != PROTOCOL:
         await client.close()
-        if e.code != "busy":
-            raise
-        raise BrokerError(
-            "version",
-            f"broker {old} is running with active claims but this client is {__version__}; "
-            "release the claims (or let them expire) and retry, or stop the old broker by hand",
-        ) from e
-    await client.close()
-    await _wait_gone()
-    return await _start(holder)
+        raise _protocol_error(client)
+    return client
