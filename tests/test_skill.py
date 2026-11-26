@@ -36,6 +36,14 @@ def test_plugin_manifest():
     assert manifest["license"] == "Apache-2.0"
 
 
+def test_plugin_declares_mcp_server():
+    server = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["mcpServers"]["fpgas-online"]
+    assert server["command"] == "uv"
+    assert server["args"] == ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--no-dev", "--frozen", "fpgas-online-mcp"]
+    # not in a root .mcp.json: that would also be a project config for anyone working on this repo
+    assert not (ROOT / ".mcp.json").exists()
+
+
 def test_marketplace_lists_plugin():
     marketplace = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
     assert len(marketplace["plugins"]) == 1
@@ -68,14 +76,20 @@ def test_references_do_not_chain():
         assert not REFERENCE_LINK.search(path.read_text()), f"{path.name} links to another reference"
 
 
+def shipped_files():
+    """Skill files plus the package sources: both are scanned for forbidden strings."""
+    return skill_files() + [p for p in (ROOT / "src").rglob("*") if p.is_file() and "__pycache__" not in p.parts]
+
+
 def test_no_stderr_discard():
-    for path in skill_files():
+    for path in shipped_files():
         assert "2>/dev/null" not in path.read_text(), path
 
 
 def test_no_operator_paths():
-    pattern = re.compile(r"10\.21\.|tweed|:8765")
-    for path in skill_files():
+    pattern = re.compile(r"10\.21\.|10\.99\.|tweed|:8765")
+    fixtures = [p for p in (ROOT / "tests" / "fixtures").rglob("*") if p.is_file()]
+    for path in shipped_files() + fixtures:
         assert not pattern.search(path.read_text()), path
 
 
