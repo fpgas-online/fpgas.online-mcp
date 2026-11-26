@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import inuse
-from .boards import Board, BoardId, switch_port, tt_host_of, tt_switch_port
+from .boards import Board, BoardId, host_changed, switch_port, tt_host_of, tt_switch_port
 from .claims import Claim
 from .sites import SiteError
 from .ssh import RUN_SLACK_S
@@ -142,6 +142,8 @@ async def power_cycle(
     if isinstance(target, str):
         return _refuse(f"not cycling: {target}", steps)
     port, switch, master = target
+    if is_tt and master is not None and str(master) != claim.host:
+        return _refuse(f"not cycling: {host_changed(board.id, master, claim.host)}", steps)
 
     old_id: str | None = None
     old_uptime: float | None = None

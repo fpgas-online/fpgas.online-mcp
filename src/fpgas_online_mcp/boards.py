@@ -102,6 +102,18 @@ def tt_host_of(page: BoardPage) -> BoardId | None:
     return None if sp is None else BoardId(TT_HOST_SITE, f"pi-sw{sp[0]}-p{sp[1]}")
 
 
+def host_changed(board: BoardId, live: BoardId, held: str | None) -> str:
+    """Why a Tiny Tapeout claim no longer covers its board: the board is on another Pi than the claim holds.
+
+    A claim holds the Pi the board was on when it was claimed (that Pi passed the in-use check and
+    is the one other claims are kept off); a claim is never moved to a new Pi behind the holder's back.
+    """
+    return (
+        f"{board} is now on {live} but this claim holds {held or 'no Pi'}; release this claim and claim the "
+        "board again (that checks the new Pi)"
+    )
+
+
 @dataclass(frozen=True)
 class Board:
     id: BoardId

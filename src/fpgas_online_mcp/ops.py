@@ -20,7 +20,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from . import guide, inuse, power
-from .boards import Board, BoardId, inventory, switch_port, tt_host
+from .boards import Board, BoardId, host_changed, inventory, switch_port, tt_host
 from .broker import Broker, Conn
 from .claims import Claim, ClaimConflict, ClaimGone, ClaimStore
 from .paths import PathTooLong
@@ -189,22 +189,35 @@ async def _host_or_none(state: State, board: Board) -> BoardId | None:
         return None
 
 
-async def _ssh_target(state: State, board: Board) -> tuple[BoardId, BoardId | None]:
-    """(host to ssh to, via): the board itself, or for a Tiny Tapeout board its Pi and the board."""
-    if board.site != "tinytapeout":
-        return board.id, None
+async def _live_host(state: State, board: Board) -> BoardId | None:
+    """The Pi a Tiny Tapeout board's live page names; an unreadable page is site_unavailable."""
     try:
-        host = await tt_host(state.sites, board.name)
+        return await tt_host(state.sites, board.name)
     except SiteError as e:
         raise BrokerError(
             "site_unavailable", f"cannot read the board page of {board.id} to find its Pi: {e}; try again in a minute"
         ) from e
+
+
+def _check_host(board: Board, claim: Claim, live: BoardId) -> None:
+    """The claim must hold the Pi the board is on now (see boards.host_changed)."""
+    if str(live) != claim.host:
+        raise BrokerError("host_changed", host_changed(board.id, live, claim.host))
+
+
+async def _ssh_target(state: State, board: Board, claim: Claim) -> tuple[BoardId, BoardId | None]:
+    """(host to ssh to, via): the board itself, or for a Tiny Tapeout board its Pi (which the claim must
+    hold) and the board."""
+    if board.site != "tinytapeout":
+        return board.id, None
+    host = await _live_host(state, board)
     if host is None:
         raise BrokerError(
             "not_connected",
             f"the board page of {board.id} names no Pi: the board is not connected now; check board_status later "
             "or pick another board",
         )
+    _check_host(board, claim, host)
     return host, board.id
 
 
@@ -378,7 +391,8 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
     tt_state = None
     host = None
     if renew_id is None:
-        host = await _host_or_none(state, board)
+        # An unreadable page refuses the claim: a claim without its Pi would not keep the Pi's claims off.
+        host = await _live_host(state, board) if board.site == "tinytapeout" else None
         key = str(host) if host else None
         other = state.claims.shared(str(board.id), key)
         if other is not None:  # before the slow in-use check: the same Pi is already claimed
@@ -463,7 +477,7 @@ def _ssh_error(board: Board, e: Exception, next_step: str) -> BrokerError:
 async def op_connect(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = _claim_for(state, board, args, conn)
-    host, via = await _ssh_target(state, board)
+    host, via = await _ssh_target(state, board, claim)
     try:
         info = await state.ssh.ensure_master(host, via=via)
     except PathTooLong as e:
@@ -507,8 +521,8 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     command = _str(args, "command", required=True)
     timeout_s = _int(args, "timeout_s", 60, 1, MAX_RUN_TIMEOUT_S)
-    _claim_for(state, board, args, conn)
-    host, via = await _ssh_target(state, board)
+    claim = _claim_for(state, board, args, conn)
+    host, via = await _ssh_target(state, board, claim)
     try:
         r = await state.ssh.run(host, command, timeout_s, via=via)
     except PathTooLong as e:
@@ -544,6 +558,9 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
 async def op_power_cycle(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = _claim_for(state, board, args, conn)
+    live = await _host_or_none(state, board)
+    if live is not None:  # before the slow in-use check; power_cycle checks again at the toggle
+        _check_host(board, claim, live)
 
     def should_stop() -> bool:
         """The caller hung up, or the claim was released or expired, while the check ran."""

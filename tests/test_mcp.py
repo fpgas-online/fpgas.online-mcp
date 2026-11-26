@@ -418,6 +418,7 @@ async def test_power_cycle_stops_when_the_claim_is_released_during_the_check(sta
 async def test_tinytapeout_claim_records_state(stack):
     status = {"reachable": True, "kind": "fpga", "clients": 0, "idle_display": {"state": "loaded"}}
     stack.site.override[("tinytapeout.fpgas.online", "/board/fpga-2/status.json")] = httpx.Response(200, json=status)
+    stack.site.override[("tinytapeout.fpgas.online", "/board/fpga-2/")] = httpx.Response(200, text=NO_PI)
     async with stack.session() as c:
         ok(await call(c, "claim_board", board=TT, purpose="design test"))
     assert stack.state.claims.for_board(TT).tt_state_at_claim == "loaded"
@@ -777,3 +778,38 @@ async def test_holder_connected_until_last_connection_closes(stack):
         await two.close()
     await asyncio.sleep(0.1)
     assert stack.state.claims.for_board(WELLAND).holder_connected is False
+
+
+def tt_page(switch, port):
+    return httpx.Response(200, text=f'<html><div data-port="{port}" data-switch="{switch}"></div></html>')
+
+
+async def test_tinytapeout_board_that_moved_to_another_pi_is_refused_until_claimed_again(stack):
+    async with stack.session() as c:
+        claim = ok(await call(c, "claim_board", board=TT_CHIP, purpose="chip test"))
+        stack.site.override[("tinytapeout.fpgas.online", "/board/tt-ab2a48a7ee008dd9/")] = tt_page(2, 12)
+        for name, args in (("connect", {}), ("run", {"command": "true"}), ("power_cycle", {})):
+            text = err(await call(c, name, board=TT_CHIP, **args))
+            assert f"{TT_CHIP} is now on welland:pi-sw2-p12 but this claim holds {TT_PI}" in text
+            assert "release this claim and claim the board again" in text
+        assert stack.power.calls == []
+        ok(await call(c, "release_board", claim_id=claim["claim_id"]))
+        ok(await call(c, "claim_board", board=TT_CHIP, purpose="chip test"))
+        assert stack.state.claims.for_board(TT_CHIP).host == "welland:pi-sw2-p12"
+
+
+async def test_tinytapeout_claim_without_a_pi_is_refused_once_the_board_appears(stack):
+    stack.site.override[("tinytapeout.fpgas.online", "/board/fpga-2/")] = httpx.Response(200, text=NO_PI)
+    async with stack.session() as c:
+        ok(await call(c, "claim_board", board=TT, purpose="x"))  # not connected: may be claimed, holds no Pi
+        assert stack.state.claims.for_board(TT).host is None
+        stack.site.override[("tinytapeout.fpgas.online", "/board/fpga-2/")] = tt_page(2, 11)
+        text = err(await call(c, "connect", board=TT))
+        assert f"{TT} is now on {TT_PI} but this claim holds no Pi" in text
+
+
+async def test_tinytapeout_claim_with_an_unreadable_board_page_is_refused(stack):
+    async with stack.session() as c:  # fpga-2 has no board page fixture: HTTP 404
+        text = err(await call(c, "claim_board", board=TT, purpose="x"))
+        assert "cannot read the board page" in text and "try again in a minute" in text
+    assert stack.state.claims.for_board(TT) is None and stack.inuse.calls == []
