@@ -33,6 +33,7 @@ TT_MAX_WAITING_READS = 3  # the first read plus two re-reads
 
 MAX_OTHER_CONNECTIONS = 5
 TT_NOT_LISTED = "carries a Tiny Tapeout board the Tiny Tapeout site does not list"
+TT_NO_SERIAL = "the Pi did not report its Tiny Tapeout board's serial, so web visitors cannot be checked"
 TRUNCATED = "in-use output was truncated"
 
 _ACTIVE = re.compile(r"^active: (.*)$")
@@ -322,16 +323,22 @@ def _carries_tt(board: Board) -> bool:
 
 
 async def _tt_rule_of_pi(board: Board, sites, clock, sleep, now) -> Verdict:
-    """The site rule of the Tiny Tapeout board plugged into welland Pi `board`. When the live registry
-    shows no such board now, or the Tiny Tapeout site lists none with its USB serial, an `idle` that
-    leaves the ssh verdict alone (with a signal for the unlisted board). No claim discount: a claim on
-    the Pi is not one on the Tiny Tapeout board."""
+    """The site rule of the Tiny Tapeout board plugged into welland Pi `board`.
+
+    When the live registry shows no such board now, an `idle` that leaves the ssh verdict alone. A
+    board whose serial the Pi did not report, or that the Tiny Tapeout site does not list (after one
+    live re-read of the catalogue: the cached one may predate the board), is `unknown`: nobody can
+    tell whether a web visitor is on it, and unknown is never idle. No claim discount: a claim on
+    the Pi is not one on the Tiny Tapeout board.
+    """
     serials = await tt_serials_on(sites, board.name)
     if not serials:
         return _verdict("idle", [])
-    tt_board = await tt_board_with_serial(sites, serials)
+    if None in serials:
+        return _verdict("unknown", [TT_NO_SERIAL])
+    tt_board = await tt_board_with_serial(sites, serials) or await tt_board_with_serial(sites, serials, live=True)
     if tt_board is None:
-        return _verdict("idle", [TT_NOT_LISTED])
+        return _verdict("unknown", [TT_NOT_LISTED])
     v = await _tt_site_rule(tt_board, sites, None, clock, sleep, now)
     return _verdict(v.verdict, [f"carries the Tiny Tapeout board {tt_board.id}", *v.signals])
 

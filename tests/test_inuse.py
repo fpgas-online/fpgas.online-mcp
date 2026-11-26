@@ -1,5 +1,6 @@
 """In-use check: script parity, verdict parsing, the Tiny Tapeout rule, holder discount, failures."""
 
+import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -464,6 +465,7 @@ class PiSites:
         return self.registry, Entry(b"", NOW, False)
 
     async def tt_slugs(self, live=False):
+        self.slug_reads = [*getattr(self, "slug_reads", []), live]
         if self.slug_exc:
             raise self.slug_exc
         return list(self.statuses), Entry(b"", NOW, False)
@@ -500,11 +502,31 @@ async def test_pi_with_a_tt_board_someone_uses_over_ssh_is_in_use():
     assert v.verdict == "in use" and "board says: tmux client, 12 s ago" in v.signals
 
 
-@pytest.mark.parametrize("registry_id", ["0000000000000000", None])
-async def test_pi_with_an_unlisted_tt_board_has_the_ssh_verdict_and_says_so(registry_id):
-    sites = PiSites({"tt-de641070db746f27": chip_status()}, registry_id=registry_id)
+async def test_pi_with_an_unlisted_tt_board_is_unknown_after_a_live_reread():
+    sites = PiSites({"tt-de641070db746f27": chip_status()}, registry_id="0000000000000000")
     v, _ = await run_pi(sites)
-    assert v.verdict == "idle" and v.signals == [inuse.TT_NOT_LISTED] and sites.live_reads == []
+    assert v.verdict == "unknown" and v.signals == [inuse.TT_NOT_LISTED]
+    assert sites.slug_reads == [False, True]  # the cached catalogue, then once live
+
+
+async def test_pi_with_a_tt_board_listed_only_in_the_live_catalogue_is_found():
+    sites = PiSites({"tt-de641070db746f27": chip_status(clients=1)})
+    real = sites.tt_status
+
+    async def cached_is_old(slug, live=False):  # the cached status.json still shows another serial
+        status, entry = await real(slug, live)
+        return (status if live else chip_status(serial="0000000000000000")), entry
+
+    sites.tt_status = cached_is_old
+    v, _ = await run_pi(sites)
+    assert v.verdict == "in use" and sites.slug_reads == [False, True]
+
+
+async def test_pi_whose_tt_board_has_no_serial_is_unknown():
+    sites = PiSites({"tt-de641070db746f27": chip_status()}, registry_id=None)
+    v, _ = await run_pi(sites)
+    assert v.verdict == "unknown" and v.signals == [inuse.TT_NO_SERIAL]
+    assert getattr(sites, "slug_reads", []) == []
 
 
 async def test_pi_whose_tt_catalogue_cannot_be_read_is_unknown():
@@ -533,3 +555,24 @@ async def test_pi_whose_live_registry_shows_no_tt_board_now_has_the_ssh_verdict(
     sites.registry[0]["boards"] = [{"type": "Fomu", "id": None}]  # the TT board was moved meanwhile
     v, _ = await run_pi(sites)
     assert v.verdict == "idle" and v.signals == [] and sites.live_reads == []
+
+
+async def test_the_two_halves_of_a_tt_check_run_at_the_same_time():
+    """The site rule sleeps between reads: the ssh half must start while it waits, not after it ends."""
+    ft = FakeTime()
+    sites = FakeSites(tt("loaded"))
+    seen = {}
+
+    class Ssh(FakeSsh):
+        async def run(self, b, command, timeout_s, via=None):
+            seen["site_reads"] = sites.reads  # 0: ssh went first, alone; 2: after the site half ended
+            return await super().run(b, command, timeout_s, via)
+
+    async def sleep(s):
+        await asyncio.sleep(0)  # a real wait yields to the other half
+        await ft.sleep(s)
+
+    v = await inuse.check(
+        board("tinytapeout", "fpga-2"), Ssh(script_out("idle")), sites, None, clock=ft, sleep=sleep, now=lambda: NOW
+    )
+    assert v.verdict == "idle" and seen["site_reads"] == 1

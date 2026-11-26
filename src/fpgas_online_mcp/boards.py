@@ -214,9 +214,9 @@ def _tt_type(status: dict) -> str | None:
     return None
 
 
-async def _tt_board(sites: SiteClient, slug: str, cat: Entry) -> Board:
+async def _tt_board(sites: SiteClient, slug: str, cat: Entry, live: bool = False) -> Board:
     try:
-        status, entry = await sites.tt_status(slug)
+        status, entry = await sites.tt_status(slug, live=live)
     except SiteError:
         return _board("tinytapeout", slug, cat, condition="unknown")
     stale = cat.stale or entry.stale
@@ -233,9 +233,9 @@ async def _tt_board(sites: SiteClient, slug: str, cat: Entry) -> Board:
     )
 
 
-async def _tinytapeout(sites: SiteClient) -> list[Board]:
-    slugs, cat = await sites.tt_slugs()
-    return list(await asyncio.gather(*(_tt_board(sites, s, cat) for s in slugs)))
+async def _tinytapeout(sites: SiteClient, live: bool = False) -> list[Board]:
+    slugs, cat = await sites.tt_slugs(live=live)
+    return list(await asyncio.gather(*(_tt_board(sites, s, cat, live) for s in slugs)))
 
 
 async def tt_serials_on(sites: SiteClient, name: str) -> list[str | None]:
@@ -250,11 +250,11 @@ async def tt_serials_on(sites: SiteClient, name: str) -> list[str | None]:
     ]
 
 
-async def tt_board_with_serial(sites: SiteClient, serials: list[str | None]) -> Board | None:
+async def tt_board_with_serial(sites: SiteClient, serials: list[str | None], live: bool = False) -> Board | None:
     """The Tiny Tapeout site's board whose USB serial is one of `serials`, or None when the site lists
     none of them. SiteError when the catalogue, or the status of a board that could be the one, cannot
     be read: "not listed" must not be said of a board the site could not show."""
-    boards = await _tinytapeout(sites)
+    boards = await _tinytapeout(sites, live)
     found = next((b for b in boards if b.usb_serial and b.usb_serial in serials), None)
     if found is None and any(b.condition == "unknown" for b in boards):
         raise SiteError("tinytapeout: could not read every board's status.json, so cannot tell which is on this Pi")
