@@ -17,6 +17,7 @@ import pytest
 
 from fpgas_online_mcp import ssh as ssh_mod
 from fpgas_online_mcp.boards import BoardId, ssh_port
+from fpgas_online_mcp.paths import PathTooLong
 from fpgas_online_mcp.sites import BoardPage
 from fpgas_online_mcp.ssh import PortMismatch, SshManager, wrap_untrusted
 
@@ -49,7 +50,7 @@ def env(monkeypatch):
     monkeypatch.setenv("FAKE_SSH_LOG", str(log))
     monkeypatch.setenv("FAKE_SSH_STATE", str(base / "state"))
     sites = FakeSites()
-    mgr = SshManager(sites, ssh_bin=str(fake), config_dir=cfg, runtime_dir=run)
+    mgr = SshManager(sites, ssh_bin=str(fake), config_dir=cfg, runtime_dir=run, check_paths=False)
     yield mgr, sites, cfg, log
     for child in base.glob("state.*.child"):  # the fake's daemonised "master" process
         with contextlib.suppress(ValueError, ProcessLookupError):
@@ -289,7 +290,7 @@ async def test_blocks_reloaded_without_blank_line_growth(env):
     await mgr.ensure_master(BOARD)
     await mgr.ensure_master(BoardId("ps1", "pi3"))
     first = (cfg / "ssh_config").read_text()
-    again = SshManager(sites, ssh_bin=mgr._ssh, config_dir=cfg, runtime_dir=mgr._runtime_dir)
+    again = SshManager(sites, ssh_bin=mgr._ssh, config_dir=cfg, runtime_dir=mgr._runtime_dir, check_paths=False)
     await again.ensure_master(BoardId("welland", "pi-sw2-p1"))
     text = (cfg / "ssh_config").read_text()
     assert text.count("Host fpgas-") == 3 and "\n\n\n" not in text
@@ -300,3 +301,11 @@ def test_rejects_unsafe_dirs(tmp_path):
     for bad in ("a%b", 'a"b'):
         with pytest.raises(ValueError):
             SshManager(FakeSites(), config_dir=tmp_path / bad, runtime_dir=tmp_path)
+
+
+async def test_control_path_too_long_is_refused(env):
+    mgr, sites, cfg, log = env
+    mgr.check_paths = True  # the test dirs are longer than a real ssh could use
+    with pytest.raises(PathTooLong, match="XDG_RUNTIME_DIR"):
+        await mgr.ensure_master(BOARD)
+    assert sites.calls == 0 and not entries(log)

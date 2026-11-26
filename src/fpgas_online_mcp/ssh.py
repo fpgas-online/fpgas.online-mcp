@@ -115,7 +115,16 @@ def _write_private(path: Path, content: str, mode: int) -> None:
 
 
 class SshManager:
-    def __init__(self, sites, ssh_bin: str = "ssh", config_dir: Path | None = None, runtime_dir: Path | None = None):
+    def __init__(
+        self,
+        sites,
+        ssh_bin: str = "ssh",
+        config_dir: Path | None = None,
+        runtime_dir: Path | None = None,
+        check_paths: bool = True,
+    ):
+        """check_paths=False skips the ControlPath length check (tests with a fake ssh and long dirs)."""
+        self.check_paths = check_paths
         self._sites = sites
         self._ssh = ssh_bin
         self._config_dir = Path(config_dir) if config_dir else paths.config_dir()
@@ -271,6 +280,8 @@ class SshManager:
     async def ensure_master(self, board: BoardId) -> MasterInfo:
         self._require_ssh(board)
         async with self._locks.setdefault(str(board), asyncio.Lock()):
+            if self.check_paths:
+                paths.check_control_path_room(self._runtime_dir)
             if await self.check(board):
                 return self._info(board)
             expected = ssh_port(board.site, board.name)

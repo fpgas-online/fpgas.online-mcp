@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .paths import runtime_dir, state_dir
+from .paths import PathTooLong, runtime_dir, state_dir
 from .protocol import MAX_LINE, PROTOCOL, BrokerError, decode, encode
 
 __all__ = ["BrokerClient", "BrokerError", "connect", "version_tuple"]
@@ -185,6 +185,10 @@ async def connect(holder: str, spawn: bool = True) -> BrokerClient:
 
     With spawn=False nothing is started or stopped; `client.broker_version` says what is running.
     """
+    try:
+        runtime_dir()  # a too-long socket path is reported here, not as "the broker did not start"
+    except PathTooLong as e:
+        raise BrokerError("path_too_long", str(e)) from e
     client = await _open(holder)
     if client is None:
         if not spawn:

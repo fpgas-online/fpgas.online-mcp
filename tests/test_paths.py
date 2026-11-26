@@ -1,6 +1,8 @@
 """XDG directory helpers."""
 
+import shutil
 import stat
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,16 @@ import fpgas_online_mcp
 from fpgas_online_mcp import paths
 
 XDG = ("XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME")
+REPO_TMP = Path(__file__).resolve().parent.parent / "tmp"
+
+
+@pytest.fixture
+def tmp_path():
+    """Short (pytest's own tmp_path is too long for the socket-path check)."""
+    REPO_TMP.mkdir(exist_ok=True)
+    d = Path(tempfile.mkdtemp(dir=REPO_TMP, prefix="p"))
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
@@ -82,3 +94,26 @@ def test_version_matches_package_metadata():
 
     assert fpgas_online_mcp.__version__ == "0.1.1"
     assert version("fpgas-online-mcp") == fpgas_online_mcp.__version__
+
+
+def test_runtime_dir_too_long_for_the_broker_socket(monkeypatch, tmp_path):
+    long = tmp_path / ("x" * (110 - len(str(tmp_path))))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(long))
+    with pytest.raises(paths.PathTooLong, match="broker.sock.*shorter directory"):
+        paths.runtime_dir()
+    assert not long.exists()
+
+
+def test_control_path_room():
+    paths.check_control_path_room(Path("/run/user/1000/fpgas-online"))
+    with pytest.raises(paths.PathTooLong, match="cm-"):
+        paths.check_control_path_room(Path("/" + "d" * 60))
+
+
+async def test_client_reports_too_long_path(monkeypatch, tmp_path):
+    from fpgas_online_mcp import client
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / ("x" * 100)))
+    with pytest.raises(client.BrokerError) as e:
+        await client.connect("h")
+    assert e.value.code == "path_too_long" and "XDG_RUNTIME_DIR" in e.value.message

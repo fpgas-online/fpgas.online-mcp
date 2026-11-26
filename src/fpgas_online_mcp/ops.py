@@ -19,6 +19,7 @@ from . import guide, inuse, power
 from .boards import Board, BoardId, inventory, switch_port
 from .broker import Broker, Conn
 from .claims import Claim, ClaimConflict, ClaimGone, ClaimStore
+from .paths import PathTooLong
 from .protocol import BrokerError
 from .sites import SiteClient, SiteError
 from .ssh import PortMismatch, SshManager, defuse, wrap_untrusted
@@ -420,6 +421,8 @@ async def op_connect(state: State, args: dict, conn: Conn) -> dict:
     claim = _claim_for(state, board, args, conn)
     try:
         info = await state.ssh.ensure_master(board.id)
+    except PathTooLong as e:
+        raise BrokerError("path_too_long", f"{e}; tell the user") from e
     except PortMismatch as e:
         raise BrokerError("port_mismatch", f"{e}; tell the user") from e
     except ValueError as e:
@@ -459,6 +462,8 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
     _claim_for(state, board, args, conn)
     try:
         r = await state.ssh.run(board.id, command, timeout_s)
+    except PathTooLong as e:
+        raise BrokerError("path_too_long", f"{e}; tell the user") from e
     except PortMismatch as e:
         raise BrokerError("port_mismatch", f"{e}; tell the user") from e
     except ValueError as e:

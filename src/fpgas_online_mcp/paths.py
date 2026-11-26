@@ -4,6 +4,28 @@ import os
 from pathlib import Path
 
 APP = "fpgas-online"
+MAX_SOCKET_PATH = 107  # bytes: sun_path is 108 with the trailing NUL
+BROKER_SOCK = "broker.sock"
+# ssh's ControlPath "cm-%C" is "cm-" + 40 hex chars, and ssh adds a temporary suffix of about 20
+# while it creates the master socket.
+CONTROL_PATH_ROOM = len("/cm-") + 40 + 20
+
+
+class PathTooLong(ValueError):
+    """A Unix socket under the runtime directory would be longer than the kernel allows."""
+
+
+def _too_long(path: str) -> PathTooLong:
+    return PathTooLong(
+        f"the socket path {path} would be {len(path.encode())} bytes, more than the {MAX_SOCKET_PATH} Unix sockets "
+        "allow; set XDG_RUNTIME_DIR to a shorter directory (for example /run/user/<uid>)"
+    )
+
+
+def check_control_path_room(run: Path) -> None:
+    """Raise PathTooLong if ssh's master sockets (ControlPath cm-%C) would not fit under `run`."""
+    if len(str(run).encode()) + CONTROL_PATH_ROOM > MAX_SOCKET_PATH:
+        raise _too_long(f"{run}/cm-<40 hex chars>.<ssh's temporary suffix>")
 
 
 def _xdg(name: str, default: str) -> Path:
@@ -22,12 +44,18 @@ def _private(path: Path, top: Path) -> Path:
 
 
 def runtime_dir() -> Path:
+    """The runtime directory; PathTooLong if the broker socket in it would be too long for a Unix socket."""
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if runtime:
         top = Path(runtime) / APP
-        return _private(top, top)
-    top = _xdg("XDG_CACHE_HOME", ".cache") / APP
-    return _private(top / "run", top)
+        run, top_of = top, top
+    else:
+        top_of = _xdg("XDG_CACHE_HOME", ".cache") / APP
+        run = top_of / "run"
+    sock = f"{run}/{BROKER_SOCK}"
+    if len(sock.encode()) > MAX_SOCKET_PATH:
+        raise _too_long(sock)
+    return _private(run, top_of)
 
 
 def state_dir() -> Path:

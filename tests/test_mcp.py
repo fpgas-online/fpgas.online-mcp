@@ -107,7 +107,9 @@ async def stack(monkeypatch):
     )
     sites = SiteClient(http, Cache(paths.cache_dir()))
     claims = ClaimStore(paths.state_dir())
-    ssh = SshManager(sites, ssh_bin=str(fake), config_dir=paths.config_dir(), runtime_dir=paths.runtime_dir())
+    ssh = SshManager(
+        sites, ssh_bin=str(fake), config_dir=paths.config_dir(), runtime_dir=paths.runtime_dir(), check_paths=False
+    )
     inuse, power = FakeInuse(), FakePower()
     state = ops.State(sites, claims, ssh, inuse_check=inuse, power_cycle=power)
     broker = Broker(active_claims=claims.active_count)
