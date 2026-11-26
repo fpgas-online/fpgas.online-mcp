@@ -32,9 +32,6 @@ jobs:
     permissions:
       id-token: write # PyPI trusted publishing; no API token is stored anywhere
       contents: read
-    concurrency:
-      group: pypi-publish
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,4 +41,6 @@ jobs:
           python-version: "3.12"
       - run: uv build
       - run: uv run --no-project python scripts/check_dist.py dist
-      - run: uv publish --trusted-publishing always
+      # Each push publishes its own version, so parallel runs never collide; --check-url skips files
+      # PyPI already has (a re-run of a published commit).
+      - run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/

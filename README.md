@@ -45,7 +45,8 @@ repository's `.mcp.json` (also needs `uv`):
 ```
 
 `@latest` makes `uvx` check PyPI for a newer version at every start (without it
-`uvx` keeps using the copy it cached first). Without `uvx`:
+`uvx` keeps using the copy it cached first), so the server does not start when
+PyPI cannot be reached, even with a cached copy. Without `uvx`:
 `pip install -U fpgas-online-mcp` gives the `fpgas-online-mcp` and `fpgas-online`
 commands. For the skill alone (no MCP), copy
 `skills/fpgas-online` to `.claude/skills/fpgas-online/`.
