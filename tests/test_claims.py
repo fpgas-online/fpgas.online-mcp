@@ -170,6 +170,7 @@ async def test_file_format_and_modes(store, tmp_path):
         "expires": "2026-11-26T12:30:00Z",
         "override_reason": None,
         "tt_state_at_claim": None,
+        "host": None,
     }
     assert sorted(p.name for p in d.iterdir()) == [".lock", "welland_sw1-p1.json"]
 
@@ -296,3 +297,57 @@ async def test_expired_read_does_not_block_while_other_store_holds_lock(tmp_path
         assert f.exists()  # drop skipped while the lock is busy
     assert b.get(c.claim_id) is None
     assert not f.exists()
+
+
+# --- one claim per Pi: a Tiny Tapeout board and the welland Pi it is plugged into ----------------
+
+TT = "tinytapeout:tt-de641070db746f27"
+PI = "welland:pi-sw2-p7"
+
+
+async def test_tt_claim_and_its_pi_exclude_each_other(store, clock):
+    c = await store.claim(TT, 30, "chip test", "a@h", host=PI)
+    assert c.host == PI and store.get(c.claim_id).host == PI
+    with pytest.raises(ClaimConflict) as exc:
+        await store.claim(PI, 30, "blink", "b@h")
+    assert exc.value.existing == c and exc.value.shared == PI
+    assert str(exc.value) == f"claimed by a@h until 12:30 UTC (chip test), which is on the same Pi ({PI})"
+    await store.release(c.claim_id)
+    pi = await store.claim(PI, 30, "blink", "b@h")
+    with pytest.raises(ClaimConflict) as exc:
+        await store.claim(TT, 30, "chip test", "a@h", host=PI)
+    assert exc.value.existing == pi
+    with pytest.raises(ClaimConflict):  # another Tiny Tapeout board on that Pi
+        await store.claim("tinytapeout:tt09", 30, "x", "c@h", host=PI)
+
+
+async def test_claims_on_other_pis_do_not_conflict(store):
+    await store.claim(TT, 30, "x", "a@h", host=PI)
+    await store.claim("welland:pi-sw2-p8", 30, "x", "b@h")
+    await store.claim("tinytapeout:fpga-2", 30, "x", "c@h")  # host unknown (not connected): its own key
+    assert len(store.all()) == 3
+
+
+async def test_shared_finds_the_claim_on_the_same_hardware(store):
+    c = await store.claim(TT, 30, "x", "a@h", host=PI)
+    assert store.shared(PI, None) == c
+    assert store.shared("tinytapeout:tt09", PI) == c
+    assert store.shared(TT, PI) is None  # the same board is for_board's business
+    assert store.shared("welland:pi-sw2-p8", None) is None
+
+
+async def test_renewal_keeps_the_stored_host(store, clock):
+    c = await store.claim(TT, 30, "x", "a@h", host=PI)
+    r = await store.claim(TT, 60, "y", "a@h", claim_id=c.claim_id)
+    assert r.host == PI
+    r = await store.claim(TT, 60, "y", "a@h", claim_id=c.claim_id, host="welland:pi-sw2-p9")
+    assert r.host == PI
+
+
+async def test_old_claim_file_without_host(store, tmp_path):
+    c = await store.claim(BOARD, 30, "x", "a@h")
+    path = tmp_path / "claims" / "welland_sw1-p1.json"
+    data = json.loads(path.read_text())
+    del data["host"]
+    path.write_text(json.dumps(data))
+    assert store.get(c.claim_id).host is None
