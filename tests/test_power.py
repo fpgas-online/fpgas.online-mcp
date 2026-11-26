@@ -83,9 +83,11 @@ class Ssh:
     def __init__(self, clock, sites, answers):
         self.clock, self.sites, self.answers, self.exits, self.runs = clock, sites, answers, 0, 0
         self.timeouts = []
+        self.exited = []
 
     async def exit(self, board):
         self.exits += 1
+        self.exited.append(board)
         self.sites.order.append("exit")
 
     async def run(self, board, command, timeout_s):
@@ -312,6 +314,8 @@ async def test_tt_success_uses_uptime_below_elapsed():
     r = await run(board("tinytapeout", "fpga-2"), sites, ssh, clock)
     assert r.ok and sites.calls == [("tinytapeout", "9", 2)] and ssh.runs == 0
     assert sites.page_live == [True]  # the port is read live, never from the cache
+    # the Pi's ssh master (the board page's switch 2 port 9) is closed before the toggle
+    assert ssh.exited == [BoardId("welland", "pi-sw2-p9")] and sites.order == ["exit", "toggle"]
     assert r.seconds_to_back == 20
 
 
@@ -331,8 +335,9 @@ async def test_tt_unreadable_uptime_refuses_and_empty_port_refuses():
     r = await run(board("tinytapeout", "fpga-2"), sites, Ssh(clock, sites, lambda n, t: None), clock)
     assert not r.ok and "nothing to cycle" in r.message and sites.calls == []
     sites = Sites(clock, tt=tt_status(None), page=BoardPage(tt_port="9", tt_switch="x"))
-    r = await run(board("tinytapeout", "fpga-2"), sites, Ssh(clock, sites, lambda n, t: None), clock)
-    assert not r.ok and "no usable switch" in r.message and sites.calls == []
+    ssh = Ssh(clock, sites, lambda n, t: None)
+    r = await run(board("tinytapeout", "fpga-2"), sites, ssh, clock)
+    assert not r.ok and "no usable switch" in r.message and sites.calls == [] and ssh.exits == 0
 
 
 async def test_should_stop_before_toggle_toggles_nothing():

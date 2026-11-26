@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 
 from .cache import Entry
-from .sites import SITES, SiteClient, SiteError
+from .sites import SITES, BoardPage, SiteClient, SiteError
 
 NOTES = {
     "welland": "every registered machine, including missing ones",
@@ -81,7 +81,11 @@ async def tt_host(sites: SiteClient, slug: str) -> BoardId | None:
     live every time: boards move between Pis, so the 1-day page cache could name the wrong Pi. A
     SiteError propagates (the caller decides what an unreadable page means).
     """
-    page = await sites.board_page("tinytapeout", slug, live=True)
+    return tt_host_of(await sites.board_page("tinytapeout", slug, live=True))
+
+
+def tt_host_of(page: BoardPage) -> BoardId | None:
+    """The welland Pi a Tiny Tapeout board page names (its switch and port), or None."""
     switch, port = page.tt_switch or "", page.tt_port or ""
     if not (_POSITIVE.fullmatch(switch) and _POSITIVE.fullmatch(port)):
         return None
