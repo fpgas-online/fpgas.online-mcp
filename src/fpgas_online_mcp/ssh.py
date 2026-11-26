@@ -320,7 +320,9 @@ class SshManager:
         if not command.strip():
             raise ValueError("command is empty")
         await self.ensure_master(board)
-        remote = f"timeout -k {REMOTE_KILL_S} {timeout_s:g} sh -c {shlex.quote(command)}"
+        # The user's login shell (bash on the boards), as a plain `ssh host cmd` would use; `--` so a
+        # command starting with "-" is not read as shell options. $SHELL is expanded by the login shell.
+        remote = f'timeout -k {REMOTE_KILL_S} {timeout_s:g} "${{SHELL:-sh}}" -c -- {shlex.quote(command)}'
         args = [
             *self._base(),
             "-o",

@@ -224,7 +224,23 @@ async def test_run_wraps_command_in_remote_timeout(env):
     r = await mgr.run(BOARD, "echo 'it''s'; exit 124", 7)  # a command's own 124 is not a timeout
     assert r.output == "its\n" and r.exit_status == 124 and not r.timed_out and not r.remote_stopped
     argv = [e["argv"] for e in entries(log) if "--" in e["argv"]][-1]
-    assert argv[-1] == "timeout -k 5 7 sh -c " + shlex.quote("echo 'it''s'; exit 124")
+    assert argv[-1] == 'timeout -k 5 7 "${SHELL:-sh}" -c -- ' + shlex.quote("echo 'it''s'; exit 124")
+
+
+async def test_run_uses_the_login_shell(env, monkeypatch):
+    mgr, *_ = env
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    r = await mgr.run(BOARD, "[[ 1 == 1 ]] && echo ok", 10)
+    assert r.exit_status == 0 and r.output == "ok\n"
+
+
+async def test_run_command_starting_with_dash_is_a_command(env, monkeypatch):
+    mgr, *_ = env
+    for shell in ("/bin/bash", "/bin/sh"):
+        monkeypatch.setenv("SHELL", shell)
+        r = await mgr.run(BOARD, "-x; echo hi", 10)  # "-x" is a (missing) command, not a shell option
+        assert r.output.endswith("hi\n") and r.exit_status == 0
+        assert "llegal option" not in r.output and "invalid option" not in r.output
 
 
 async def test_local_backstop_when_the_remote_timeout_does_not_report(env, monkeypatch):

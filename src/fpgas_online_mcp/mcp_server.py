@@ -250,7 +250,13 @@ def build_server(fe: Frontend) -> MCPServer:
 
     async def run(
         board: BoardArg,
-        command: Annotated[str, Field(description="One non-interactive shell command, run on the board's host")],
+        command: Annotated[
+            str,
+            Field(
+                description="One non-interactive shell command, run on the board's host in the user's login "
+                "shell (bash on the boards)"
+            ),
+        ],
         claim_id: ClaimArg = None,
         timeout_s: Annotated[
             int,
