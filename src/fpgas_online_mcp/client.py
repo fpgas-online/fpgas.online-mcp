@@ -150,8 +150,20 @@ async def _wait_gone() -> None:
         await asyncio.sleep(POLL_S)
 
 
+# Versions written by hand before they came from `git describe` (0.0.<commits>): older than every
+# git-describe version although the tuples say otherwise, so new clients replace such a broker. (A
+# 0.1.1 client still sees itself as newer and replaces an idle new broker; that ends once the old
+# plugin copies are updated.)
+PRE_GIT_DESCRIBE = {"0.1.1"}
+
+
 def version_tuple(version: str) -> tuple[int, ...]:
-    """'0.10.2' -> (0, 10, 2); each part counts by its leading digits ('1rc2' -> 1, 'dev' -> 0)."""
+    """'0.10.2' -> (0, 10, 2); each part counts by its leading digits ('1rc2' -> 1, 'dev' -> 0).
+
+    A version from PRE_GIT_DESCRIBE counts as (0,), older than any other.
+    """
+    if version in PRE_GIT_DESCRIBE:
+        return (0,)
     parts = []
     for part in version.split("."):
         digits = len(part) - len(part.lstrip("0123456789"))
