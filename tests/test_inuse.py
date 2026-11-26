@@ -1,5 +1,6 @@
 """In-use check: script parity, verdict parsing, the Tiny Tapeout rule, holder discount, failures."""
 
+import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,6 +11,7 @@ from fpgas_online_mcp import inuse
 from fpgas_online_mcp.boards import Board, BoardId
 from fpgas_online_mcp.cache import Entry
 from fpgas_online_mcp.claims import Claim
+from fpgas_online_mcp.sites import BoardPage, SiteError
 from fpgas_online_mcp.ssh import RunResult
 
 ROOT = Path(__file__).parent.parent
@@ -30,16 +32,26 @@ class FakeSsh:
         self.result = RunResult(None if timed_out else status, text, False, timed_out)
         self.exc, self.calls = exc, []
 
-    async def run(self, b, command, timeout_s):
+    async def run(self, b, command, timeout_s, via=None):
         self.calls.append((b, command, timeout_s))
+        self.via = via
         if self.exc:
             raise self.exc
         return self.result
 
 
 class FakeSites:
-    def __init__(self, *statuses, exc=None, stale=False):
+    def __init__(self, *statuses, exc=None, stale=False, page=None, page_exc=None):
         self.statuses, self.exc, self.reads, self.stale = list(statuses), exc, 0, stale
+        self.page = page or BoardPage(tt_port="7", tt_switch="2")  # on welland:pi-sw2-p7
+        self.page_exc, self.page_live = page_exc, []
+
+    async def board_page(self, site, name, live=False):
+        assert site == "tinytapeout"
+        self.page_live.append(live)
+        if self.page_exc:
+            raise self.page_exc
+        return self.page
 
     async def tt_status(self, slug, live=False):
         assert live
@@ -72,12 +84,11 @@ def ttc(state):
     return claim(tt_state=state, board_id=TT_CLAIM)
 
 
-async def run_tt(*statuses, c=None, b=None, stale=False):
+async def run_tt(*statuses, c=None, b=None, stale=False, ssh=None, **site_kw):
     ft = FakeTime()
-    sites = FakeSites(*statuses, stale=stale)
-    v = await inuse.check(
-        b or board("tinytapeout", "fpga-2"), None, sites, c, clock=ft, sleep=ft.sleep, now=lambda: NOW
-    )
+    sites = FakeSites(*statuses, stale=stale, **site_kw)
+    ssh = ssh or FakeSsh(script_out("idle"))
+    v = await inuse.check(b or board("tinytapeout", "fpga-2"), ssh, sites, c, clock=ft, sleep=ft.sleep, now=lambda: NOW)
     return v, ft, sites
 
 
@@ -289,9 +300,98 @@ async def test_tt_unreachable_unknown():
     assert v.verdict == "unknown"
 
 
-async def test_tt_chip_board_unknown_without_reading():
-    v, _, sites = await run_tt(tt("loaded"), b=board("tinytapeout", "tt06", "chip board"))
-    assert v.verdict == "unknown" and sites.reads == 0
+# --- chip boards: the clients rule -------------------------------------------------------------
+
+CHIP = board("tinytapeout", "tt-de641070db746f27", "chip board")
+
+
+async def test_chip_board_idle_needs_zero_clients_on_two_reads_apart():
+    v, ft, sites = await run_tt(tt("not an fpga board"), b=CHIP)  # idle_display.state is not used
+    assert v.verdict == "idle" and sites.reads == 2 and sum(ft.sleeps) >= inuse.TT_MIN_GAP_S
+
+
+async def test_chip_board_clients_in_use():
+    v, _, sites = await run_tt(tt("not an fpga board"), tt("not an fpga board", clients=2), b=CHIP)
+    assert v.verdict == "in use" and "2 serial client(s)" in v.signals[0] and sites.reads == 2
+
+
+@pytest.mark.parametrize(
+    "st",
+    [
+        {"reachable": True, "idle_display": {"state": "not an fpga board"}},
+        {"reachable": True, "clients": "0"},
+        {"reachable": True, "clients": True},
+        {"reachable": False, "error": "not connected"},
+    ],
+)
+async def test_chip_board_unreadable_is_unknown(st):
+    v, _, _ = await run_tt(st, b=CHIP)
+    assert v.verdict == "unknown" and v.signals
+
+
+async def test_chip_board_stale_is_unknown():
+    v, _, _ = await run_tt(tt(None), b=CHIP, stale=True)
+    assert v.verdict == "unknown" and "stale" in v.signals[0]
+
+
+# --- Tiny Tapeout boards: the ssh check on their Pi, combined with the site rule -----------------
+
+
+async def test_tt_runs_the_script_on_its_pi():
+    ssh = FakeSsh(script_out("idle"))
+    v, _, sites = await run_tt(tt("loaded"), ssh=ssh)
+    assert v.verdict == "idle" and sites.page_live == [True]
+    host, command, timeout = ssh.calls[0]
+    assert host == BoardId("welland", "pi-sw2-p7") and ssh.via == BoardId("tinytapeout", "fpga-2")
+    assert command.startswith("sh -c ") and timeout == 30.0
+
+
+@pytest.mark.parametrize("page", [BoardPage(tt_port="", tt_switch=""), BoardPage(tt_port="x", tt_switch="2")])
+async def test_tt_not_connected_is_unknown_without_reading(page):
+    ssh = FakeSsh(script_out("idle"))
+    v, _, sites = await run_tt(tt("loaded"), ssh=ssh, page=page)
+    assert v.verdict == "unknown" and v.signals == ["the board page names no Pi: the board is not connected"]
+    assert sites.reads == 0 and ssh.calls == []
+
+
+async def test_tt_unreadable_board_page_is_unknown():
+    v, _, _ = await run_tt(tt("loaded"), page_exc=SiteError("tinytapeout: HTTP 500 for /board/fpga-2/", status=500))
+    assert v.verdict == "unknown" and "SiteError" in v.signals[0]
+
+
+async def test_tt_someone_on_the_pi_makes_it_in_use():
+    ssh = FakeSsh(script_out("in use", "active: 1 command(s) running for another login"))
+    v, _, _ = await run_tt(tt("loaded"), ssh=ssh)
+    assert v.verdict == "in use" and v.signals == ["board says: 1 command(s) running for another login"]
+    v, _, _ = await run_tt(tt("not an fpga board"), b=CHIP, ssh=ssh)
+    assert v.verdict == "in use"
+
+
+async def test_tt_either_unknown_makes_it_unknown():
+    v, _, _ = await run_tt(
+        tt("loaded"), ssh=FakeSsh(script_out("unknown (treat as in use)", "missing tool on host: ss"))
+    )
+    assert v.verdict == "unknown" and v.signals == ["board says: missing tool on host: ss"]
+    v, _, _ = await run_tt(tt("loaded"), ssh=FakeSsh(exc=RuntimeError("could not open the ssh master")))
+    assert v.verdict == "unknown" and "could not open the ssh master" in v.signals[0]
+    v, _, _ = await run_tt(tt("failed: x"), ssh=FakeSsh(script_out("idle")))
+    assert v.verdict == "unknown"
+
+
+async def test_tt_in_use_beats_unknown_and_site_signals_come_first():
+    ssh = FakeSsh(script_out("unknown (treat as in use)", "missing tool on host: ss"))
+    v, _, _ = await run_tt(tt("loaded", clients=1), ssh=ssh)
+    assert v.verdict == "in use"
+    assert v.signals == ["1 serial client(s) connected", "board says: missing tool on host: ss"]
+
+
+async def test_tt_holder_discount_on_the_pi_uses_the_tt_claim():
+    ssh = FakeSsh(script_out("in use", "active: ~/Uploads change, 100 s ago"))
+    v, _, _ = await run_tt(tt("loaded"), ssh=ssh, c=ttc("loaded"))
+    assert v.verdict == "idle" and any("ignored the claim holder's own ~/Uploads" in s for s in v.signals)
+    v, _, _ = await run_tt(tt("loaded"), ssh=ssh, c=claim(board_id="welland:pi-sw2-p7"))  # not this board's claim
+    assert v.verdict == "in use"
+    assert v.signals.count("claim c-1 is not a live claim on this board; nothing discounted") == 1
 
 
 async def test_tt_stale_unknown():
@@ -309,7 +409,12 @@ async def test_tt_not_live_claim_no_discount():
 async def test_tt_site_error_unknown():
     ft = FakeTime()
     v = await inuse.check(
-        board("tinytapeout", "fpga-2"), None, FakeSites(exc=OSError("down")), None, clock=ft, sleep=ft.sleep
+        board("tinytapeout", "fpga-2"),
+        FakeSsh(script_out("idle")),
+        FakeSites(exc=OSError("down")),
+        None,
+        clock=ft,
+        sleep=ft.sleep,
     )
     assert v.verdict == "unknown" and "OSError" in v.signals[0]
 
@@ -328,3 +433,146 @@ async def test_tt_holder_discount_needs_loaded_at_claim_and_does_not_cover_clien
     assert v.verdict == "in use"
     v, _, _ = await run_tt(tt("waiting", clients=2), c=ttc("loaded"))
     assert v.verdict == "in use"
+
+
+# --- a welland Pi that carries a Tiny Tapeout board ----------------------------------------------
+
+PI_TT = board("welland", "pi-sw2-p7", "TT chip")
+SERIAL = "de641070db746f27"
+
+
+def chip_status(serial=SERIAL, clients=0):
+    return {
+        "reachable": True,
+        "kind": "other",
+        "board": {"present": True, "usb_serial": serial, "chip": "asic"},
+        "clients": clients,
+        "idle_display": {"state": "not an fpga board"},
+    }
+
+
+class PiSites:
+    """welland registry plus the Tiny Tapeout catalogue and status.json (live reads counted)."""
+
+    def __init__(self, statuses, registry_id=SERIAL, slug_exc=None):
+        self.statuses, self.live_reads, self.slug_exc = statuses, [], slug_exc
+        self.registry = [
+            {"hostname": "pi-sw2-p7", "condition": "operational", "boards": [{"type": "TT chip", "id": registry_id}]}
+        ]
+
+    async def welland_registry(self, live=False):
+        assert live
+        return self.registry, Entry(b"", NOW, False)
+
+    async def tt_slugs(self, live=False):
+        self.slug_reads = [*getattr(self, "slug_reads", []), live]
+        if self.slug_exc:
+            raise self.slug_exc
+        return list(self.statuses), Entry(b"", NOW, False)
+
+    async def tt_status(self, slug, live=False):
+        if live:
+            self.live_reads.append(slug)
+        return self.statuses[slug], Entry(b"", NOW, False)
+
+
+async def run_pi(sites, ssh=None, b=PI_TT):
+    ft = FakeTime()
+    ssh = ssh or FakeSsh(script_out("idle"))
+    return await inuse.check(b, ssh, sites, None, clock=ft, sleep=ft.sleep, now=lambda: NOW), ssh
+
+
+async def test_pi_with_a_listed_tt_board_combines_both_checks():
+    sites = PiSites({"tt09": {"reachable": False}, "tt-de641070db746f27": chip_status()})
+    v, ssh = await run_pi(sites)
+    assert v.verdict == "idle" and sites.live_reads == ["tt-de641070db746f27"] * 2
+    assert ssh.calls[0][0] == PI_TT.id and ssh.via is None
+    sites = PiSites({"tt-de641070db746f27": chip_status(clients=1)})
+    v, _ = await run_pi(sites)
+    assert v.verdict == "in use"
+    assert v.signals == [
+        "carries the Tiny Tapeout board tinytapeout:tt-de641070db746f27",
+        "1 serial client(s) connected",
+    ]
+
+
+async def test_pi_with_a_tt_board_someone_uses_over_ssh_is_in_use():
+    ssh = FakeSsh(script_out("in use", "active: tmux client, 12 s ago"))
+    v, _ = await run_pi(PiSites({"tt-de641070db746f27": chip_status()}), ssh)
+    assert v.verdict == "in use" and "board says: tmux client, 12 s ago" in v.signals
+
+
+async def test_pi_with_an_unlisted_tt_board_is_unknown_after_a_live_reread():
+    sites = PiSites({"tt-de641070db746f27": chip_status()}, registry_id="0000000000000000")
+    v, _ = await run_pi(sites)
+    assert v.verdict == "unknown" and v.signals == [inuse.TT_NOT_LISTED]
+    assert sites.slug_reads == [False, True]  # the cached catalogue, then once live
+
+
+async def test_pi_with_a_tt_board_listed_only_in_the_live_catalogue_is_found():
+    sites = PiSites({"tt-de641070db746f27": chip_status(clients=1)})
+    real = sites.tt_status
+
+    async def cached_is_old(slug, live=False):  # the cached status.json still shows another serial
+        status, entry = await real(slug, live)
+        return (status if live else chip_status(serial="0000000000000000")), entry
+
+    sites.tt_status = cached_is_old
+    v, _ = await run_pi(sites)
+    assert v.verdict == "in use" and sites.slug_reads == [False, True]
+
+
+async def test_pi_whose_tt_board_has_no_serial_is_unknown():
+    sites = PiSites({"tt-de641070db746f27": chip_status()}, registry_id=None)
+    v, _ = await run_pi(sites)
+    assert v.verdict == "unknown" and v.signals == [inuse.TT_NO_SERIAL]
+    assert getattr(sites, "slug_reads", []) == []
+
+
+async def test_pi_whose_tt_catalogue_cannot_be_read_is_unknown():
+    sites = PiSites({}, slug_exc=SiteError("tinytapeout: cannot reach the site (ConnectError)"))
+    v, _ = await run_pi(sites)
+    assert v.verdict == "unknown" and "tinytapeout" in v.signals[0]
+    sites = PiSites({"tt09": {"reachable": False}, "fpga-2": None})  # fpga-2: status unreadable
+
+    async def broken(slug, live=False):
+        if slug == "fpga-2":
+            raise SiteError("tinytapeout: HTTP 500 for /board/fpga-2/status.json", status=500)
+        return sites.statuses[slug], Entry(b"", NOW, False)
+
+    sites.tt_status = broken
+    v, _ = await run_pi(sites)
+    assert v.verdict == "unknown" and "could not read" in v.signals[0]
+
+
+async def test_pi_without_a_tt_board_reads_neither_registry_nor_tt_site():
+    v, _ = await run_pi(None, b=board("welland", "pi-sw1-p2", "Fomu"))  # sites=None: any read would fail
+    assert v.verdict == "idle" and v.signals == []
+
+
+async def test_pi_whose_live_registry_shows_no_tt_board_now_has_the_ssh_verdict():
+    sites = PiSites({"tt-de641070db746f27": chip_status()})
+    sites.registry[0]["boards"] = [{"type": "Fomu", "id": None}]  # the TT board was moved meanwhile
+    v, _ = await run_pi(sites)
+    assert v.verdict == "idle" and v.signals == [] and sites.live_reads == []
+
+
+async def test_the_two_halves_of_a_tt_check_run_at_the_same_time():
+    """The site rule sleeps between reads: the ssh half must start while it waits, not after it ends."""
+    ft = FakeTime()
+    sites = FakeSites(tt("loaded"))
+    seen = {}
+
+    class Ssh(FakeSsh):
+        async def run(self, b, command, timeout_s, via=None):
+            seen["site_reads"] = sites.reads  # 0: ssh went first, alone; 2: after the site half ended
+            return await super().run(b, command, timeout_s, via)
+
+    async def sleep(s):
+        await asyncio.sleep(0)  # a real wait yields to the other half
+        await ft.sleep(s)
+
+    v = await inuse.check(
+        board("tinytapeout", "fpga-2"), Ssh(script_out("idle")), sites, None, clock=ft, sleep=sleep, now=lambda: NOW
+    )
+    assert v.verdict == "idle" and seen["site_reads"] == 1

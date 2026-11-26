@@ -1,5 +1,6 @@
 """Power cycle: success per site, unchanged boot id, empty ids mid-reboot, 429, refusals. No live calls."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -83,9 +84,11 @@ class Ssh:
     def __init__(self, clock, sites, answers):
         self.clock, self.sites, self.answers, self.exits, self.runs = clock, sites, answers, 0, 0
         self.timeouts = []
+        self.exited = []
 
     async def exit(self, board):
         self.exits += 1
+        self.exited.append(board)
         self.sites.order.append("exit")
 
     async def run(self, board, command, timeout_s):
@@ -113,8 +116,13 @@ def reboot_after(seconds, mid=("", "garbage")):
     return f
 
 
-async def run(b, sites, ssh, clock, check=idle):
-    return await power.power_cycle(b, CLAIM, sites, ssh, clock=clock, sleep=clock.sleep, inuse_check=check)
+# A Tiny Tapeout claim holds the Pi the board was on when claimed: the default page names switch 2 port 9.
+TT_CLAIM = replace(CLAIM, board="tinytapeout:fpga-2", host="welland:pi-sw2-p9")
+
+
+async def run(b, sites, ssh, clock, check=idle, claim=None):
+    claim = claim or (TT_CLAIM if b.site == "tinytapeout" else CLAIM)
+    return await power.power_cycle(b, claim, sites, ssh, clock=clock, sleep=clock.sleep, inuse_check=check)
 
 
 async def test_welland_success_waits_for_new_boot_id_not_empty():
@@ -312,6 +320,8 @@ async def test_tt_success_uses_uptime_below_elapsed():
     r = await run(board("tinytapeout", "fpga-2"), sites, ssh, clock)
     assert r.ok and sites.calls == [("tinytapeout", "9", 2)] and ssh.runs == 0
     assert sites.page_live == [True]  # the port is read live, never from the cache
+    # the Pi's ssh master (the board page's switch 2 port 9) is closed before the toggle
+    assert ssh.exited == [BoardId("welland", "pi-sw2-p9")] and sites.order == ["exit", "toggle"]
     assert r.seconds_to_back == 20
 
 
@@ -330,9 +340,11 @@ async def test_tt_unreadable_uptime_refuses_and_empty_port_refuses():
     sites = Sites(clock, tt=tt_status(None), page=BoardPage(tt_port="", tt_switch=""))
     r = await run(board("tinytapeout", "fpga-2"), sites, Ssh(clock, sites, lambda n, t: None), clock)
     assert not r.ok and "nothing to cycle" in r.message and sites.calls == []
-    sites = Sites(clock, tt=tt_status(None), page=BoardPage(tt_port="9", tt_switch="x"))
-    r = await run(board("tinytapeout", "fpga-2"), sites, Ssh(clock, sites, lambda n, t: None), clock)
-    assert not r.ok and "no usable switch" in r.message and sites.calls == []
+    for port, switch in (("9", "x"), ("09", "2")):  # the same parser as the Pi lookup: "09" is not a port
+        sites = Sites(clock, tt=tt_status(None), page=BoardPage(tt_port=port, tt_switch=switch))
+        ssh = Ssh(clock, sites, lambda n, t: None)
+        r = await run(board("tinytapeout", "fpga-2"), sites, ssh, clock)
+        assert not r.ok and "no usable switch" in r.message and sites.calls == [] and ssh.exits == 0
 
 
 async def test_should_stop_before_toggle_toggles_nothing():
@@ -366,3 +378,14 @@ async def test_claim_released_during_in_use_check_stops_before_toggle():
         should_stop=lambda: not live[0],
     )
     assert not r.ok and "nothing was toggled" in r.message and sites.calls == []
+
+
+@pytest.mark.parametrize("held", ["welland:pi-sw2-p8", None])
+async def test_tt_board_on_another_pi_than_its_claim_is_not_cycled(held):
+    clock = Clock()
+    sites = Sites(clock, tt=tt_status(None))
+    ssh = Ssh(clock, sites, lambda n, t: None)
+    r = await run(board("tinytapeout", "fpga-2"), sites, ssh, clock, claim=replace(TT_CLAIM, host=held))
+    assert not r.ok and "is now on welland:pi-sw2-p9" in r.message and f"holds {held or 'no Pi'}" in r.message
+    assert "claim the board again" in r.message
+    assert sites.calls == [] and ssh.exits == 0

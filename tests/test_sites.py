@@ -404,3 +404,37 @@ async def test_toggle_redirect_is_not_followed(tmp_path):
         await c.toggle("welland", "2", 1)
     await http.aclose()
     assert len(seen) == 1
+
+
+# --- Tiny Tapeout boards over ssh: HTTP status on errors, the site-wide password -----------------
+
+
+async def test_site_error_carries_the_http_status(client, site):
+    with pytest.raises(SiteError) as exc:
+        await client.board_page("welland", "pi-sw2-p7")  # not listed by welland: 404
+    assert exc.value.status == 404
+    site.fail = True
+    with pytest.raises(SiteError) as exc:
+        await client.welland_registry(live=True)
+    assert exc.value.status is None
+
+
+async def test_site_password_comes_from_the_first_listed_pi(client, site):
+    assert await client.site_password("welland") == "REDACTED"
+    assert site.count("/fpgas/pi-sw1-p2.html") == 1  # the first Pi the index lists
+
+
+async def test_site_password_refuses_a_page_whose_port_disagrees_with_its_name(client, site):
+    page = (FIX / "welland_board.html").read_text().replace("10222", "10322")
+    site.override[("welland.fpgas.online", "/fpgas/pi-sw1-p2.html")] = httpx.Response(200, text=page)
+    with pytest.raises(SiteError, match="10322") as exc:
+        await client.site_password("welland")
+    assert "REDACTED" not in str(exc.value)
+
+
+async def test_site_password_needs_a_listed_pi(client, site):
+    site.override[("welland.fpgas.online", "/fpgas/")] = httpx.Response(200, text="<html>no pis</html>")
+    with pytest.raises(SiteError, match="lists no Pi"):
+        await client.site_password("welland")
+    with pytest.raises(SiteError, match="no site-wide"):
+        await client.site_password("tinytapeout")

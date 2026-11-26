@@ -112,4 +112,9 @@ curl -sS -A fpgas-online-skill https://tinytapeout.fpgas.online/board/fpga-2/sta
   jq -r 'if .reachable then "up, chip=\(.board.chip)" else "down: \(.error)" end'
 ```
 
-The Tiny Tapeout site has no ssh; use the web API (tinytapeout.md).
+A Tiny Tapeout board has the web API on this site (tinytapeout.md) and is plugged into a
+welland Pi that takes ssh: the board page's `data-switch` and `data-port` name it
+(`pi-sw<switch>-p<port>`; empty when not connected; tinytapeout.md, "The board's Pi"). In
+welland's registry that Pi lists the board with a `type` starting `TT` (`TT chip`, `TT FPGA`)
+and its USB serial as `id`; a Pi whose only board is a chip board is not on welland's
+`/fpgas/` page.

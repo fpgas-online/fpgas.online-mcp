@@ -18,7 +18,7 @@ import pytest
 from fpgas_online_mcp import ssh as ssh_mod
 from fpgas_online_mcp.boards import BoardId, ssh_port
 from fpgas_online_mcp.paths import PathTooLong
-from fpgas_online_mcp.sites import BoardPage
+from fpgas_online_mcp.sites import BoardPage, SiteError
 from fpgas_online_mcp.ssh import PortMismatch, SshManager, wrap_untrusted
 
 SECRET = "s3cr3tpw"
@@ -30,10 +30,18 @@ class FakeSites:
     def __init__(self):
         self.calls = 0
         self.port: int | None = None  # None: the port the name gives
+        self.missing: dict[str, int | None] = {}  # host name -> the SiteError status its page fails with
+        self.site_password_calls = 0
 
     async def board_page(self, site, name):
         self.calls += 1
+        if name in self.missing:
+            raise SiteError(f"{site}: HTTP {self.missing[name]} for /fpgas/{name}.html", status=self.missing[name])
         return BoardPage(password=SECRET, ssh_port=self.port or ssh_port(site, name))
+
+    async def site_password(self, site):
+        self.site_password_calls += 1
+        return SECRET
 
 
 @pytest.fixture
@@ -325,3 +333,50 @@ async def test_control_path_too_long_is_refused(env):
     with pytest.raises(PathTooLong, match="XDG_RUNTIME_DIR"):
         await mgr.ensure_master(BOARD)
     assert sites.calls == 0 and not entries(log)
+
+
+# --- a Tiny Tapeout board's Pi, which the welland site does not list -------------------------------
+
+TT_PI = BoardId("welland", "pi-sw2-p7")
+TT_BOARD = BoardId("tinytapeout", "tt-de641070db746f27")
+
+
+async def test_unlisted_pi_of_a_tt_board_uses_the_site_password(env, caplog):
+    caplog.set_level(logging.DEBUG)
+    mgr, sites, cfg, log = env
+    sites.missing["pi-sw2-p7"] = 404
+    info = await mgr.ensure_master(TT_PI, via=TT_BOARD)
+    assert info.alias == "fpgas-welland-pi-sw2-p7" and sites.site_password_calls == 1
+    text = (cfg / "ssh_config").read_text()
+    assert "Host fpgas-welland-pi-sw2-p7" in text and "Port 20722" in text and SECRET not in text
+    assert (cfg / "welland.pw").read_text() == SECRET
+    r = await mgr.run(TT_PI, "echo on the pi", 10, via=TT_BOARD)
+    assert r.exit_status == 0 and r.output == "on the pi\n"
+    assert SECRET not in log.read_text() + caplog.text + repr(info) + repr(r)
+
+
+async def test_unlisted_pi_without_via_stays_refused(env):
+    mgr, sites, cfg, log = env
+    sites.missing["pi-sw2-p7"] = 404
+    with pytest.raises(SiteError, match="404"):
+        await mgr.ensure_master(TT_PI)
+    with pytest.raises(SiteError, match="404"):
+        await mgr.run(TT_PI, "true", 5)
+    assert sites.site_password_calls == 0 and not any("-MNf" in e["argv"] for e in entries(log))
+
+
+@pytest.mark.parametrize("status", [500, None])
+async def test_a_site_that_is_down_is_not_a_missing_page(env, status):
+    mgr, sites, cfg, log = env
+    sites.missing["pi-sw2-p7"] = status
+    with pytest.raises(SiteError):
+        await mgr.ensure_master(TT_PI, via=TT_BOARD)
+    assert sites.site_password_calls == 0
+
+
+async def test_listed_pi_with_via_still_reads_its_own_page(env):
+    mgr, sites, cfg, log = env
+    sites.port = 10322  # its own page disagrees with its name: still refused, even with via
+    with pytest.raises(PortMismatch):
+        await mgr.ensure_master(BoardId("welland", "pi-sw2-p33"), via=BoardId("tinytapeout", "fpga-1"))
+    assert sites.site_password_calls == 0

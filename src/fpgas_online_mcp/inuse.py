@@ -1,5 +1,8 @@
-"""In-use check: the stage 1 script over the shared ssh master (welland, ps1) or the
-Tiny Tapeout `status.json` rule. Verdicts: idle, in use, unknown ("unknown" is never "idle").
+"""In-use check: the stage 1 script over the shared ssh master (welland, ps1), and for a Tiny
+Tapeout board both that script on the welland Pi it is plugged into and the site's `status.json`
+rule. Verdicts: idle, in use, unknown ("unknown" is never "idle").
+
+Two checks combine as: in use if either says so, else unknown if either says so, else idle.
 
 The claim holder's own activity is discounted (spec, "In-use check"): `~/Uploads` changes newer
 than the claim's start, and on Tiny Tapeout `waiting` / `left: ...` after a `loaded` state at
@@ -16,7 +19,7 @@ from datetime import UTC, datetime
 from importlib import resources
 from typing import Literal
 
-from .boards import Board
+from .boards import Board, BoardId, carries_tt, tt_board_with_serial, tt_host, tt_serials_on
 from .claims import Claim
 from .ssh import defuse
 
@@ -29,6 +32,8 @@ TT_MAX_READS = 10
 TT_MAX_WAITING_READS = 3  # the first read plus two re-reads
 
 MAX_OTHER_CONNECTIONS = 5
+TT_NOT_LISTED = "carries a Tiny Tapeout board the Tiny Tapeout site does not list"
+TT_NO_SERIAL = "the Pi did not report its Tiny Tapeout board's serial, so web visitors cannot be checked"
 TRUNCATED = "in-use output was truncated"
 
 _ACTIVE = re.compile(r"^active: (.*)$")
@@ -168,9 +173,36 @@ def _live_claim(board: Board, claim: Claim | None, now: Callable[[], datetime]) 
     return None, [f"claim {claim.claim_id} is not a live claim on this board; nothing discounted"]
 
 
-async def _check_ssh(board: Board, ssh, claim: Claim | None, now: Callable[[], datetime]) -> Verdict:
+def _failed(exc: Exception) -> Verdict:
+    return _verdict("unknown", [f"the check failed: {type(exc).__name__}: {exc}"])
+
+
+async def _safe(check) -> Verdict:
+    """Await one half of a combined check; a failure is that half's `unknown`, so the other half's
+    signals are still shown."""
+    try:
+        return await check
+    except Exception as exc:
+        return _failed(exc)
+
+
+def _combine(site: Verdict, ssh: Verdict) -> Verdict:
+    """In use if either is, else unknown if either is, else idle; signals from both, the site's first."""
+    verdicts = (site.verdict, ssh.verdict)
+    verdict = "in use" if "in use" in verdicts else "unknown" if "unknown" in verdicts else "idle"
+    return _verdict(verdict, list(dict.fromkeys([*site.signals, *ssh.signals])))
+
+
+async def _check_ssh(
+    board: Board, ssh, claim: Claim | None, now: Callable[[], datetime], host: BoardId | None = None
+) -> Verdict:
+    """The script on the board's host: the board itself, or `host` (the Pi a Tiny Tapeout board is
+    plugged into; the claim is still compared against the Tiny Tapeout board)."""
     command = "sh -c " + shlex.quote(remote_script())
-    result = await ssh.run(board.id, command, SCRIPT_TIMEOUT_S)
+    if host is None:
+        result = await ssh.run(board.id, command, SCRIPT_TIMEOUT_S)
+    else:
+        result = await ssh.run(host, command, SCRIPT_TIMEOUT_S, via=board.id)
     if result.timed_out:
         return _verdict("unknown", [f"the in-use script timed out after {SCRIPT_TIMEOUT_S:g} s"])
     if result.exit_status != 0:
@@ -190,6 +222,15 @@ def _tt_state(status: dict) -> tuple[str | None, int | None]:
     return (state if isinstance(state, str) else None), clients
 
 
+def _usable_status(status: dict, entry) -> str | None:
+    """Why a status.json read cannot be used, or None."""
+    if entry is not None and entry.stale:
+        return "status.json is stale (the site could not be refreshed)"
+    if status.get("reachable") is not True:
+        return "the board is not reachable (no status from the site)"
+    return None
+
+
 async def _check_tt(board: Board, sites, claim: Claim | None, clock, sleep, now) -> Verdict:
     live, claim_notes = _live_claim(board, claim, now)
     holder_loaded = live is not None and live.tt_state_at_claim == "loaded"
@@ -197,10 +238,8 @@ async def _check_tt(board: Board, sites, claim: Claim | None, clock, sleep, now)
     waiting = 0
     for _ in range(TT_MAX_READS):
         status, entry = await sites.tt_status(board.name, live=True)
-        if entry is not None and entry.stale:
-            return _verdict("unknown", [*claim_notes, "status.json is stale (the site could not be refreshed)"])
-        if status.get("reachable") is not True:
-            return _verdict("unknown", [*claim_notes, "the board is not reachable (no status from the site)"])
+        if (why := _usable_status(status, entry)) is not None:
+            return _verdict("unknown", [*claim_notes, why])
         state, clients = _tt_state(status)
         if clients is None or state is None:
             return _verdict("unknown", [*claim_notes, "status.json has no usable clients/idle_display.state"])
@@ -238,6 +277,77 @@ async def _check_tt(board: Board, sites, claim: Claim | None, clock, sleep, now)
     return _verdict("unknown", [*claim_notes, "status.json never settled to a stable reading"])
 
 
+async def _check_tt_clients(board: Board, sites, clock, sleep) -> Verdict:
+    """Chip boards: idle only when `clients` (serial clients) is 0 on two reads at least TT_MIN_GAP_S
+    apart. `idle_display.state` is not used (a chip board always says 'not an fpga board')."""
+    first_ok: float | None = None
+    for _ in range(TT_MAX_READS):
+        status, entry = await sites.tt_status(board.name, live=True)
+        if (why := _usable_status(status, entry)) is not None:
+            return _verdict("unknown", [why])
+        _, clients = _tt_state(status)
+        if clients is None:
+            return _verdict("unknown", ["status.json has no usable clients count"])
+        if clients > 0:
+            return _verdict("in use", [f"{clients} serial client(s) connected"])
+        t = clock()
+        if first_ok is not None and t - first_ok >= TT_MIN_GAP_S:
+            return _verdict("idle", [])
+        if first_ok is None:
+            first_ok = t
+        await sleep(TT_MIN_GAP_S - (t - first_ok) + 0.5)
+    return _verdict("unknown", ["status.json never settled to a stable reading"])
+
+
+async def _tt_site_rule(board: Board, sites, claim: Claim | None, clock, sleep, now) -> Verdict:
+    if board.type == "chip board":
+        return await _check_tt_clients(board, sites, clock, sleep)
+    return await _check_tt(board, sites, claim, clock, sleep, now)
+
+
+async def _check_tt_board(board: Board, ssh, sites, claim: Claim | None, clock, sleep, now) -> Verdict:
+    """A Tiny Tapeout board: the site rule and the ssh script on its Pi, at the same time."""
+    host = await tt_host(sites, board.name)
+    if host is None:
+        return _verdict("unknown", ["the board page names no Pi: the board is not connected"])
+    site_verdict, ssh_verdict = await asyncio.gather(
+        _safe(_tt_site_rule(board, sites, claim, clock, sleep, now)),
+        _safe(_check_ssh(board, ssh, claim, now, host)),
+    )
+    return _combine(site_verdict, ssh_verdict)
+
+
+async def _tt_rule_of_pi(board: Board, sites, clock, sleep, now) -> Verdict:
+    """The site rule of the Tiny Tapeout board plugged into welland Pi `board`.
+
+    When the live registry shows no such board now, an `idle` that leaves the ssh verdict alone. A
+    board whose serial the Pi did not report, or that the Tiny Tapeout site does not list (after one
+    live re-read of the catalogue: the cached one may predate the board), is `unknown`: nobody can
+    tell whether a web visitor is on it, and unknown is never idle. No claim discount: a claim on
+    the Pi is not one on the Tiny Tapeout board.
+    """
+    serials = await tt_serials_on(sites, board.name)
+    if not serials:
+        return _verdict("idle", [])
+    if None in serials:
+        return _verdict("unknown", [TT_NO_SERIAL])
+    tt_board = await tt_board_with_serial(sites, serials) or await tt_board_with_serial(sites, serials, live=True)
+    if tt_board is None:
+        return _verdict("unknown", [TT_NOT_LISTED])
+    v = await _tt_site_rule(tt_board, sites, None, clock, sleep, now)
+    return _verdict(v.verdict, [f"carries the Tiny Tapeout board {tt_board.id}", *v.signals])
+
+
+async def _check_pi_with_tt(board: Board, ssh, sites, claim: Claim | None, clock, sleep, now) -> Verdict:
+    """A welland Pi that carries a Tiny Tapeout board: its ssh script and that board's site rule, so a
+    web visitor on the Tiny Tapeout page blocks a claim on the Pi too."""
+    site_verdict, ssh_verdict = await asyncio.gather(
+        _safe(_tt_rule_of_pi(board, sites, clock, sleep, now)),
+        _safe(_check_ssh(board, ssh, claim, now)),
+    )
+    return _combine(site_verdict, ssh_verdict)
+
+
 async def check(
     board: Board,
     ssh,
@@ -250,9 +360,9 @@ async def check(
     """Live in-use check of one board. Never raises: any failure gives an `unknown` verdict."""
     try:
         if board.site == "tinytapeout":
-            if board.type == "chip board":
-                return _verdict("unknown", ["chip boards have no idle rule: ask the user"])
-            return await _check_tt(board, sites, claim, clock, sleep, now)
+            return await _check_tt_board(board, ssh, sites, claim, clock, sleep, now)
+        if carries_tt(board):
+            return await _check_pi_with_tt(board, ssh, sites, claim, clock, sleep, now)
         return await _check_ssh(board, ssh, claim, now)
     except Exception as exc:
-        return _verdict("unknown", [f"the check failed: {type(exc).__name__}: {exc}"])
+        return _failed(exc)

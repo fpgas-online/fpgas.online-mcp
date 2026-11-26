@@ -62,10 +62,10 @@ verified), so expect only the HTTPS parts to work there.
 | --- | --- |
 | `guide` | The skill text: sites, sharing rules, topics |
 | `list_boards` | All boards of all sites, one dense row each (condition, last seen) plus local claims; filter by site, condition or type |
-| `board_status` | One board's facts and the live in-use check (idle / in use / unknown) |
-| `claim_board` | Claim a board (30 min default, 240 max); runs the in-use check first; renews with `claim_id` |
+| `board_status` | One board's facts (for a Tiny Tapeout board, the welland Pi it is plugged into) and the live in-use check (idle / in use / unknown) |
+| `claim_board` | Claim a board (30 min default, 240 max); runs the in-use check first; renews with `claim_id`. A Tiny Tapeout board's claim holds the welland Pi it was on when claimed (no one can claim that Pi meanwhile); if the board moves, `connect`, `run` and `power_cycle` refuse until you claim it again |
 | `release_board` | Release a claim |
-| `connect` | Open the shared ssh connection; returns the ssh/scp command lines |
+| `connect` | Open the shared ssh connection (a Tiny Tapeout board's: to the welland Pi it is plugged into); returns the ssh/scp command lines |
 | `run` | Run one non-interactive command on the host (output at most 8 KB, wrapped as untrusted) |
 | `power_cycle` | Cycle the port and wait for a real reboot (about 8 minutes at worst) |
 
@@ -138,6 +138,12 @@ One broker per user serves all sessions and exits when idle. Stop it with
 connected). A newer client replaces an older broker once it is idle; until then,
 and for older clients, sessions of different versions share the running broker.
 
+When upgrading, run one broker version per machine: stop the old broker (or let
+it go idle) before using the new one. An older broker sharing the claims
+directory does not apply the one-claim-per-Pi rule (a Tiny Tapeout board and the
+welland Pi it is plugged into), so a claim taken through it can overlap one taken
+through the new broker.
+
 ## Sandbox
 
 If Claude Code's sandbox is on, allow reads and writes in
@@ -154,7 +160,8 @@ a network allowlist that you configure; allow:
 - HTTPS (443) to `welland.fpgas.online`, `ps1.fpgas.online`,
   `tinytapeout.fpgas.online` and `docs.fpgas.online`.
 - Outbound TCP for ssh to `welland.fpgas.online` on ports 10122-14022 and
-  20122-24822 (pattern `<switch><2-digit port>22`, for example `10222`), and to
+  20122-24822 (pattern `<switch><2-digit port>22`, for example `10222`; the
+  Tiny Tapeout boards' Pis are among them), and to
   `ps1.fpgas.online` on ports `(100+N)*100+22` (for example `10322` for `pi3`;
   the hosts listed on 2026-11-25, `pi2` to `pi23`, use 10222-12322).
 - WSS (443) to `tinytapeout.fpgas.online` for the serial bridge.

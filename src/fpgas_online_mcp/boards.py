@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass, field
 
 from .cache import Entry
-from .sites import SITES, SiteClient, SiteError
+from .sites import SITES, BoardPage, SiteClient, SiteError
 
 NOTES = {
     "welland": "every registered machine, including missing ones",
@@ -13,8 +13,12 @@ NOTES = {
     "tinytapeout": "catalogue; condition from status.json",
 }
 
+# Every Tiny Tapeout board is plugged into a Pi of this site; the board page names which one.
+TT_HOST_SITE = "welland"
+
 _WELLAND_NAME = re.compile(r"pi-sw([0-9]+)-p([0-9]+)")
 _PS1_NAME = re.compile(r"pi([0-9]+)")
+_POSITIVE = re.compile(r"[1-9][0-9]*")
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,52 @@ def ssh_port(site: str, name: str) -> int | None:
     if switch is None:
         return (100 + port) * 100 + 22
     return int(f"{switch}{port:02d}22") if switch > 0 and port < 100 else None
+
+
+async def tt_host(sites: SiteClient, slug: str) -> BoardId | None:
+    """The welland Pi a Tiny Tapeout board is plugged into, from its live board page; None when the page
+    names none (no Pi reports the board: it is not connected).
+
+    The page's switch and port come from the Pi's own registration; the Pi is `pi-sw<s>-p<p>`. Read
+    live every time: boards move between Pis, so the 1-day page cache could name the wrong Pi. A
+    SiteError propagates (the caller decides what an unreadable page means).
+    """
+    return tt_host_of(await sites.board_page("tinytapeout", slug, live=True))
+
+
+def tt_switch_port(page: BoardPage) -> tuple[int, int] | None:
+    """(switch, port) a Tiny Tapeout board page names, or None unless both are plain positive integers.
+
+    The one parser for these attributes: the Pi lookup and the power toggle must agree on what the
+    page says, so a value like "07" is refused by both rather than read differently.
+    """
+    switch, port = page.tt_switch or "", page.tt_port or ""
+    if not (_POSITIVE.fullmatch(switch) and _POSITIVE.fullmatch(port)):
+        return None
+    return int(switch), int(port)
+
+
+def tt_host_of(page: BoardPage) -> BoardId | None:
+    """The welland Pi a Tiny Tapeout board page names (its switch and port), or None."""
+    sp = tt_switch_port(page)
+    return None if sp is None else BoardId(TT_HOST_SITE, f"pi-sw{sp[0]}-p{sp[1]}")
+
+
+def carries_tt(board: "Board") -> bool:
+    """A welland Pi whose registry boards include a Tiny Tapeout one (type "TT ...")."""
+    return board.site == "welland" and any(t.strip().startswith("TT") for t in (board.type or "").split(","))
+
+
+def host_changed(board: BoardId, live: BoardId, held: str | None) -> str:
+    """Why a Tiny Tapeout claim no longer covers its board: the board is on another Pi than the claim holds.
+
+    A claim holds the Pi the board was on when it was claimed (that Pi passed the in-use check and
+    is the one other claims are kept off); a claim is never moved to a new Pi behind the holder's back.
+    """
+    return (
+        f"{board} is now on {live} but this claim holds {held or 'no Pi'}; release this claim and claim the "
+        "board again (that checks the new Pi)"
+    )
 
 
 @dataclass(frozen=True)
@@ -123,15 +173,20 @@ def _rank(machine: dict) -> tuple:
     return (machine.get("condition") != "missing", str(machine.get("last_seen") or ""))
 
 
-async def _welland(sites: SiteClient) -> list[Board]:
-    machines, entry = await sites.welland_registry()
+def _chosen(machines: list[dict]) -> dict[str, dict]:
+    """One registry entry per hostname (see _rank)."""
     chosen: dict[str, dict] = {}
     for m in machines:
         name = m.get("hostname")
         if isinstance(name, str) and name and (name not in chosen or _rank(m) > _rank(chosen[name])):
             chosen[name] = m
+    return chosen
+
+
+async def _welland(sites: SiteClient) -> list[Board]:
+    machines, entry = await sites.welland_registry()
     boards = []
-    for name, m in chosen.items():
+    for name, m in _chosen(machines).items():
         types = [b["type"] for b in m.get("boards") or [] if isinstance(b, dict) and b.get("type")]
         network = m.get("network") or {}
         boot_id = network.get("boot_id") if network.get("current_boot") is True else None
@@ -164,9 +219,9 @@ def _tt_type(status: dict) -> str | None:
     return None
 
 
-async def _tt_board(sites: SiteClient, slug: str, cat: Entry) -> Board:
+async def _tt_board(sites: SiteClient, slug: str, cat: Entry, live: bool = False) -> Board:
     try:
-        status, entry = await sites.tt_status(slug)
+        status, entry = await sites.tt_status(slug, live=live)
     except SiteError:
         return _board("tinytapeout", slug, cat, condition="unknown")
     stale = cat.stale or entry.stale
@@ -183,9 +238,32 @@ async def _tt_board(sites: SiteClient, slug: str, cat: Entry) -> Board:
     )
 
 
-async def _tinytapeout(sites: SiteClient) -> list[Board]:
-    slugs, cat = await sites.tt_slugs()
-    return list(await asyncio.gather(*(_tt_board(sites, s, cat) for s in slugs)))
+async def _tinytapeout(sites: SiteClient, live: bool = False) -> list[Board]:
+    slugs, cat = await sites.tt_slugs(live=live)
+    return list(await asyncio.gather(*(_tt_board(sites, s, cat, live) for s in slugs)))
+
+
+async def tt_serials_on(sites: SiteClient, name: str) -> list[str | None]:
+    """The ids (USB serials) of the Tiny Tapeout boards (type "TT ...") the live welland registry puts on
+    Pi `name`; [] when it carries none. An id is None when the Pi did not report one."""
+    machines, _ = await sites.welland_registry(live=True)
+    entry = _chosen(machines).get(name) or {}
+    return [
+        b.get("id")
+        for b in entry.get("boards") or []
+        if isinstance(b, dict) and str(b.get("type") or "").startswith("TT")
+    ]
+
+
+async def tt_board_with_serial(sites: SiteClient, serials: list[str | None], live: bool = False) -> Board | None:
+    """The Tiny Tapeout site's board whose USB serial is one of `serials`, or None when the site lists
+    none of them. SiteError when the catalogue, or the status of a board that could be the one, cannot
+    be read: "not listed" must not be said of a board the site could not show."""
+    boards = await _tinytapeout(sites, live)
+    found = next((b for b in boards if b.usb_serial and b.usb_serial in serials), None)
+    if found is None and any(b.condition == "unknown" for b in boards):
+        raise SiteError("tinytapeout: could not read every board's status.json, so cannot tell which is on this Pi")
+    return found
 
 
 _LOADERS = {"welland": _welland, "ps1": _ps1, "tinytapeout": _tinytapeout}

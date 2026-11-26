@@ -1,7 +1,8 @@
 """Power cycle: toggle a board's PoE port through the site and wait until the host really rebooted.
 
 The only destructive tool. Order: fresh in-use check (refuse unless idle) -> record the boot to
-replace (refuse if unreadable) -> close the ssh master -> toggle (no retry on 429) -> poll every
+replace (refuse if unreadable) -> close the ssh master (a Tiny Tapeout board's: its Pi's, when the
+board page names one) -> toggle (no retry on 429) -> poll every
 10 s for up to 300 s. A board is back only when its boot id changed (Tiny Tapeout: `uptime_s`
 smaller than the time since the toggle) and it answers. Empty or null values never count.
 """
@@ -13,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import inuse
-from .boards import Board, switch_port
+from .boards import Board, BoardId, host_changed, switch_port, tt_host_of, tt_switch_port
 from .claims import Claim
 from .sites import SiteError
 from .ssh import RUN_SLACK_S
@@ -88,20 +89,21 @@ async def _tt_uptime(sites, name: str) -> float | None:
     return _number(status.get("uptime_s"))
 
 
-async def _toggle_args(board: Board, sites) -> tuple[str, int | None] | str:
-    """(port, switch) for the toggle body, or a refusal message."""
+async def _toggle_args(board: Board, sites) -> tuple[str, int | None, BoardId | None] | str:
+    """(port, switch) for the toggle body and the host whose ssh master to close first (a Tiny Tapeout
+    board's Pi, from the same live page; None when it names none), or a refusal message."""
     if board.site in ("welland", "ps1"):
         target = switch_port(board.site, board.name)
         if target is None:
             return f"cannot work out the switch port from the name {board.name!r}"
-        return str(target[0]), target[1]
+        return str(target[0]), target[1], board.id
     page = await sites.board_page("tinytapeout", board.name, live=True)
     if not page.tt_port or not page.tt_switch:
         return "the board page names no switch port: nothing to cycle"
-    try:
-        return page.tt_port, int(page.tt_switch)
-    except ValueError:
-        return "the board page names no usable switch: nothing to cycle"
+    sp = tt_switch_port(page)
+    if sp is None:
+        return "the board page names no usable switch and port: nothing to cycle"
+    return str(sp[1]), sp[0], tt_host_of(page)
 
 
 def _refuse(message: str, steps: list[str]) -> CycleResult:
@@ -139,7 +141,9 @@ async def power_cycle(
         return _refuse(f"not cycling: {e}", steps)
     if isinstance(target, str):
         return _refuse(f"not cycling: {target}", steps)
-    port, switch = target
+    port, switch, master = target
+    if is_tt and master is not None and str(master) != claim.host:
+        return _refuse(f"not cycling: {host_changed(board.id, master, claim.host)}", steps)
 
     old_id: str | None = None
     old_uptime: float | None = None
@@ -165,8 +169,8 @@ async def power_cycle(
     if should_stop():
         steps.append("stopped before the toggle")
         return _refuse(CANCELLED, steps)
-    if not is_tt:
-        await ssh.exit(board.id)  # the master would sit on a dead socket after the reboot
+    if master is not None:
+        await ssh.exit(master)  # the master would sit on a dead socket after the reboot
     if should_stop():
         steps.append("stopped before the toggle")
         return _refuse(CANCELLED, steps)

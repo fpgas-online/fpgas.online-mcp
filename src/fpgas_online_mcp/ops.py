@@ -7,6 +7,10 @@ Claim resolution (connect, run, power_cycle): an explicit `claim_id` must be the
 board (the id is the authority: any holder may pass it). Without one, the board's live claim counts if
 its id is among `claim_ids` (the ids the front end created and remembers) or was created on this
 connection. No claim -> an error naming claim_board.
+
+A Tiny Tapeout board is plugged into a welland Pi (its board page names which, read live):
+connect and run use that Pi's ssh master, and its claim records the Pi so the board and the Pi
+cannot be claimed by two holders at once.
 """
 
 import json
@@ -16,7 +20,17 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from . import guide, inuse, power
-from .boards import Board, BoardId, inventory, switch_port
+from .boards import (
+    Board,
+    BoardId,
+    carries_tt,
+    host_changed,
+    inventory,
+    switch_port,
+    tt_board_with_serial,
+    tt_host,
+    tt_serials_on,
+)
 from .broker import Broker, Conn
 from .claims import Claim, ClaimConflict, ClaimGone, ClaimStore
 from .paths import PathTooLong
@@ -174,6 +188,49 @@ def _verdict_view(v) -> dict:
     return view
 
 
+async def _host_or_none(state: State, board: Board) -> BoardId | None:
+    """The Pi of a Tiny Tapeout board, or None (another site's board, no Pi named, page unreadable)."""
+    if board.site != "tinytapeout":
+        return None
+    try:
+        return await tt_host(state.sites, board.name)
+    except SiteError as e:
+        log.info("cannot read the Pi of %s: %s", board.id, e)
+        return None
+
+
+async def _live_host(state: State, board: Board) -> BoardId | None:
+    """The Pi a Tiny Tapeout board's live page names; an unreadable page is site_unavailable."""
+    try:
+        return await tt_host(state.sites, board.name)
+    except SiteError as e:
+        raise BrokerError(
+            "site_unavailable", f"cannot read the board page of {board.id} to find its Pi: {e}; try again in a minute"
+        ) from e
+
+
+def _check_host(board: Board, claim: Claim, live: BoardId) -> None:
+    """The claim must hold the Pi the board is on now (see boards.host_changed)."""
+    if str(live) != claim.host:
+        raise BrokerError("host_changed", host_changed(board.id, live, claim.host))
+
+
+async def _ssh_target(state: State, board: Board, claim: Claim) -> tuple[BoardId, BoardId | None]:
+    """(host to ssh to, via): the board itself, or for a Tiny Tapeout board its Pi (which the claim must
+    hold) and the board."""
+    if board.site != "tinytapeout":
+        return board.id, None
+    host = await _live_host(state, board)
+    if host is None:
+        raise BrokerError(
+            "not_connected",
+            f"the board page of {board.id} names no Pi: the board is not connected now; check board_status later "
+            "or pick another board",
+        )
+    _check_host(board, claim, host)
+    return host, board.id
+
+
 def _conflict(e: ClaimConflict) -> BrokerError:
     return BrokerError(
         "claimed",
@@ -303,6 +360,9 @@ async def op_board_status(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = state.claims.for_board(str(board.id))
     result = {"board": _board_view(board, claim, conn, full=True)}
+    host = await _host_or_none(state, board)
+    if host is not None:
+        result["board"]["host"] = str(host)
     if args.get("check_use", True) is not False:
         result["in_use"] = _verdict_view(await state.check(board, state.ssh, state.sites, None))
     return result
@@ -339,7 +399,14 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
 
     verdict = None
     tt_state = None
+    host = None
     if renew_id is None:
+        # An unreadable page refuses the claim: a claim without its Pi would not keep the Pi's claims off.
+        host = await _live_host(state, board) if board.site == "tinytapeout" else None
+        key = str(host) if host else None
+        other = state.claims.shared(str(board.id), key)
+        if other is not None:  # before the slow in-use check: the same Pi is already claimed
+            raise _conflict(ClaimConflict(other, shared=key or str(board.id)))
         verdict = await state.check(board, state.ssh, state.sites, None)
         if verdict.verdict != "idle" and override is None:
             signals = "; ".join(verdict.signals)
@@ -364,6 +431,7 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
             claim_id=renew_id,
             override_reason=override if renew_id is None else None,
             tt_state_at_claim=tt_state,
+            host=str(host) if host else None,
         )
     except ClaimConflict as e:
         raise _conflict(e) from e
@@ -408,6 +476,38 @@ async def op_release_board(state: State, args: dict, conn: Conn) -> dict:
     return {"released": claim_id, "as_of": _now()}
 
 
+async def _tt_board_of_pi(state: State, board: Board) -> str | None:
+    """The id of the Tiny Tapeout board on welland Pi `board`, if the sites can say which."""
+    try:
+        serials = [s for s in await tt_serials_on(state.sites, board.name) if s]
+        if not serials:
+            return None
+        found = await tt_board_with_serial(state.sites, serials) or await tt_board_with_serial(
+            state.sites, serials, live=True
+        )
+    except SiteError:
+        return None
+    return str(found.id) if found else None
+
+
+async def _unlisted_pi(state: State, board: Board, e: Exception) -> BrokerError | None:
+    """A welland Pi whose own page is a 404 because it carries only a Tiny Tapeout board: say to use the
+    board instead (its claim also holds this Pi and finds the password), else None."""
+    if not (isinstance(e, SiteError) and e.status == 404 and carries_tt(board)):
+        return None
+    slug = await _tt_board_of_pi(state, board)
+    instead = (
+        f"claim and connect {slug} instead"
+        if slug
+        else ("claim and connect that board instead (find it with list_boards site tinytapeout)")
+    )
+    return BrokerError(
+        "use_tt_board",
+        f"ssh to {board.id} failed: welland does not list this Pi (its page is a 404); this Pi is reached "
+        f"through its Tiny Tapeout board: {instead}",
+    )
+
+
 def _ssh_error(board: Board, e: Exception, next_step: str) -> BrokerError:
     """ssh's own text can carry a host's pre-auth banner: log it all, show at most 1 KB of it wrapped."""
     detail = str(e)
@@ -419,8 +519,9 @@ def _ssh_error(board: Board, e: Exception, next_step: str) -> BrokerError:
 async def op_connect(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = _claim_for(state, board, args, conn)
+    host, via = await _ssh_target(state, board, claim)
     try:
-        info = await state.ssh.ensure_master(board.id)
+        info = await state.ssh.ensure_master(host, via=via)
     except PathTooLong as e:
         raise BrokerError("path_too_long", f"{e}; tell the user") from e
     except PortMismatch as e:
@@ -428,9 +529,14 @@ async def op_connect(state: State, args: dict, conn: Conn) -> dict:
     except ValueError as e:
         raise BrokerError("no_ssh", f"{e}; use board_status and the guide topic tinytapeout") from e
     except (RuntimeError, SiteError) as e:
-        raise _ssh_error(board, e, "check board_status and retry later, or pick another board") from e
+        raise await _unlisted_pi(state, board, e) or _ssh_error(
+            board, e, "check board_status and retry later, or pick another board"
+        ) from e
+    result = {"board": str(board.id)}
+    if via is not None:
+        result["host"] = str(host)
     return {
-        "board": str(board.id),
+        **result,
         "claim_id": claim.claim_id,
         "alias": info.alias,
         "config": info.config_path,
@@ -459,9 +565,10 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     command = _str(args, "command", required=True)
     timeout_s = _int(args, "timeout_s", 60, 1, MAX_RUN_TIMEOUT_S)
-    _claim_for(state, board, args, conn)
+    claim = _claim_for(state, board, args, conn)
+    host, via = await _ssh_target(state, board, claim)
     try:
-        r = await state.ssh.run(board.id, command, timeout_s)
+        r = await state.ssh.run(host, command, timeout_s, via=via)
     except PathTooLong as e:
         raise BrokerError("path_too_long", f"{e}; tell the user") from e
     except PortMismatch as e:
@@ -469,11 +576,13 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
     except ValueError as e:
         raise BrokerError("no_ssh", str(e)) from e
     except (RuntimeError, SiteError) as e:
-        raise _ssh_error(board, e, "check board_status and retry later") from e
+        raise await _unlisted_pi(state, board, e) or _ssh_error(board, e, "check board_status and retry later") from e
     budget = RUN_LIMIT - RUN_HEADER_RESERVE - len(wrap_untrusted("").encode())
     output, cut = _fit_bytes(defuse(r.output), budget)
-    result = {
-        "board": str(board.id),
+    result = {"board": str(board.id)}
+    if via is not None:
+        result["host"] = str(host)
+    result |= {
         "exit_status": r.exit_status,
         "timed_out": r.timed_out,
         "truncated": r.truncated or cut,
@@ -493,6 +602,9 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
 async def op_power_cycle(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = _claim_for(state, board, args, conn)
+    live = await _host_or_none(state, board)
+    if live is not None:  # before the slow in-use check; power_cycle checks again at the toggle
+        _check_host(board, claim, live)
 
     def should_stop() -> bool:
         """The caller hung up, or the claim was released or expired, while the check ran."""

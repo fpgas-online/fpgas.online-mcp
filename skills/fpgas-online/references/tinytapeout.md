@@ -1,13 +1,15 @@
 # Tiny Tapeout boards
 
-Site: https://tinytapeout.fpgas.online. No ssh; everything is HTTP and one WebSocket. Slugs and
-listing: boards.md. Is the board free: in-use.md (Tiny Tapeout section; its idle rule is the
-only one, do not invent another). Power-cycle: power.md. Full docs:
+Site: https://tinytapeout.fpgas.online, a skin over the normal fpgas.online interface. Every
+Tiny Tapeout board is plugged into a welland Pi, and that Pi takes ssh like any other welland
+host: the board has the web API and the WebSocket below **and** ssh on its Pi ("The board's
+Pi" below). Slugs and listing: boards.md. Is the board free: in-use.md (Tiny Tapeout section;
+its rule is the only one, do not invent another). Power-cycle: power.md. Full docs:
 https://docs.fpgas.online/en/latest/user/boards/tt-fpga/index.html (FPGA boards) and
 https://docs.fpgas.online/en/latest/user/boards/tt-asic/index.html (chip boards).
 
-All commands send `-A fpgas-online-skill`. Never talk to the Pi behind the site; every call goes
-through tinytapeout.fpgas.online.
+All commands send `-A fpgas-online-skill`. Web calls go through tinytapeout.fpgas.online and
+ssh goes through welland.fpgas.online, as for any welland host; nothing else.
 
 **What was and was not run (2026-11-25).** Every GET below was run live. The enable POST, the
 bitstream POST and the serial WebSocket were **not exercised live on 2026-11-25: no idle board**.
@@ -29,14 +31,41 @@ permission system and not retried.
 
 A chip board runs one fixed chip, chosen on the board page with the Commander, not by this API. An
 FPGA board loads designs (bitstreams for an iCE40) into its FPGA. A serial bridge exists only for
-FPGA and chip boards that the Pi's boot check passed. Observed: one session got 503 from the
-public serial WebSocket, and most chip boards had no usable bridge; when it answers 503 or 404,
-do not retry in a loop, tell the user.
+FPGA and chip boards whose Pi passed its boot check since it last booted: until then the serial
+WebSocket answers 503 `board not ready` (from the site's code), and 404 when no live board is
+behind the slug. Neither gets better by retrying in a loop: tell the user.
 
 Board SDK versions differ per board (seen: 3.0.7 and 3.1.1; `project_index` an integer on one,
 a string like `'3-0'` on another): do not assume one board's Commander code works on another.
 On the chip boards the Pmod HAT ties `ui_in[1:3]` to `uio[1:3]`, so a project that drives `uio`
 there fights the RP2350.
+
+## The board's Pi (ssh)
+
+The board page carries the Pi's switch and port in its `data-switch` and `data-port`
+attributes (the site takes them from the Pi's own registration); the Pi is the welland host
+`pi-sw<switch>-p<port>`. Both are empty when no Pi reports the board: it is not connected.
+Boards move between Pis, so read the page each time you need the Pi:
+
+```sh
+S=fpga-4
+curl -sS -A fpgas-online-skill "https://tinytapeout.fpgas.online/board/$S/" |
+  sed -n 's/.*data-port="\([0-9][0-9]*\)" data-switch="\([0-9][0-9]*\)".*/pi-sw\2-p\1/p' | head -n1
+```
+
+Printed `pi-sw2-p35` for `fpga-4` and nothing for a board that is not connected (2026-11-27).
+Log in to that host as to any welland host (ssh.md: port `<switch><2-digit port>22`, here
+23522). A Pi whose only board is a Tiny Tapeout chip board is not listed on welland's
+`/fpgas/` page, so it has no page of its own (HTTP 404); its login is the same as every
+welland Pi's, so use the password from any listed Pi's page (ssh.md). Live ssh to a chip
+board's Pi was not tried (2026-11-27); this follows from the site's code.
+
+Do not open the board's serial device yourself on the Pi; use the WebSocket below for serial.
+Run in-use.md's check first, as for any shared host. The MCP tools do this for you: `connect`
+and `run` on `tinytapeout:<slug>` find the Pi and say which (`host`). A claim on the board
+holds the Pi the board was on when it was claimed (and keeps other claims off that Pi); if
+the board moves to another Pi, `connect`, `run` and `power_cycle` refuse: release the claim
+and claim the board again, which checks the new Pi.
 
 ## Status and designs (read-only, run live)
 

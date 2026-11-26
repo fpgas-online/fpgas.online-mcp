@@ -15,8 +15,13 @@ Format (all times ISO 8601 UTC, `Z` suffix):
       "started": "2026-11-26T12:00:00Z",    # kept across renewals
       "expires": "2026-11-26T12:30:00Z",    # claims last 1..240 minutes (default 30)
       "override_reason": null,              # why an in-use board was claimed anyway
-      "tt_state_at_claim": null             # Tiny Tapeout state seen at claim time
+      "tt_state_at_claim": null,            # Tiny Tapeout state seen at claim time
+      "host": null                          # Tiny Tapeout: the Pi it is plugged into ("welland:pi-sw2-p7")
     }
+
+One claim per Pi: a claim's hardware key is its `host`, else its board. A new claim is refused
+while another board with the same key has a live claim, so a Tiny Tapeout board and the welland Pi
+it is plugged into exclude each other. Files written before `host` existed read as host None.
 
 Mutations hold an flock on `claims/.lock` (cross-process) and an asyncio lock.
 Naive times in a hand-edited file are read as UTC.
@@ -57,16 +62,24 @@ class Claim:
     expires: datetime
     override_reason: str | None = None
     tt_state_at_claim: str | None = None
+    host: str | None = None
     holder_connected: bool = False  # in memory only, not persisted
+
+    @property
+    def key(self) -> str:
+        """The hardware this claim holds: its Pi when known, else its board."""
+        return self.host or self.board
 
 
 class ClaimConflict(Exception):
-    """The board already has a live claim by someone else."""
+    """The board, or another board on the same Pi (`shared` names that Pi), already has a live claim."""
 
-    def __init__(self, existing: Claim):
+    def __init__(self, existing: Claim, shared: str | None = None):
         self.existing = existing
+        self.shared = shared
         until = existing.expires.astimezone(UTC).strftime("%H:%M UTC")
-        super().__init__(f"claimed by {existing.holder} until {until} ({existing.purpose})")
+        same_pi = f", which is on the same Pi ({shared})" if shared else ""
+        super().__init__(f"claimed by {existing.holder} until {until} ({existing.purpose}){same_pi}")
 
 
 class ClaimGone(Exception):
@@ -143,6 +156,7 @@ class ClaimStore:
             "expires": _iso(claim.expires),
             "override_reason": claim.override_reason,
             "tt_state_at_claim": claim.tt_state_at_claim,
+            "host": claim.host,
         }
         fd, tmp = tempfile.mkstemp(dir=self._dir, prefix=".claim-", suffix=".tmp")
         try:
@@ -168,6 +182,7 @@ class ClaimStore:
                 expires=_parse(d["expires"]),
                 override_reason=d.get("override_reason"),
                 tt_state_at_claim=d.get("tt_state_at_claim"),
+                host=d.get("host"),
             )
         except FileNotFoundError:
             return None
@@ -221,6 +236,11 @@ class ClaimStore:
     def for_board(self, board: str) -> Claim | None:
         return self._load(self._path(board))
 
+    def shared(self, board: str, host: str | None) -> Claim | None:
+        """A live claim on another board that holds the same hardware (the same Pi) as board/host would."""
+        key = host or board
+        return next((c for c in self.all() if c.board != board and c.key == key), None)
+
     def active_count(self) -> int:
         return len(self.all())
 
@@ -241,7 +261,10 @@ class ClaimStore:
         claim_id: str | None = None,
         override_reason: str | None = None,
         tt_state_at_claim: str | None = None,
+        host: str | None = None,
     ) -> Claim:
+        """Claim board, or renew claim_id. `host`: the Pi the board is plugged into (new claims only;
+        a renewal keeps the stored one)."""
         minutes = DEFAULT_MINUTES if minutes is None else minutes
         if not 1 <= minutes <= MAX_MINUTES:
             raise ValueError(f"minutes must be between 1 and {MAX_MINUTES}, got {minutes}")
@@ -267,6 +290,9 @@ class ClaimStore:
                     tt_state_at_claim=tt_state_at_claim or existing.tt_state_at_claim,
                 )
             else:
+                other = self.shared(board, host)
+                if other is not None:
+                    raise ClaimConflict(other, shared=host or board)
                 claim = Claim(
                     claim_id="c-" + secrets.token_urlsafe(9),
                     board=board,
@@ -276,6 +302,7 @@ class ClaimStore:
                     expires=expires,
                     override_reason=override_reason,
                     tt_state_at_claim=tt_state_at_claim,
+                    host=host,
                     holder_connected=holder in self._connected,
                 )
             self._write(claim)
