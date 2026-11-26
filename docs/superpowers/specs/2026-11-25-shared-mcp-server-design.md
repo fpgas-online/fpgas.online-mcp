@@ -80,8 +80,9 @@ It is for people and agents who use the boards, not for running the infrastructu
   timeout. The stage 1 skill's "a ps1 toggle may hit another board: ask the user first"
   text is corrected to match (first task of the plan).
 - The in-use logic and its limits are in `skills/fpgas-online/references/in-use.md`; the
-  Tiny Tapeout idle rule (`clients` 0 twice ≥15 s apart and `idle_display.state == loaded`)
-  is there too.
+  Tiny Tapeout idle rule (`clients` 0 twice ≥15 s apart and `idle_display.state == loaded`;
+  chip boards: `clients` 0 twice) is there too. Since 2026-11-27 (2026-11-27-tt-boards-over-ssh-design.md) a Tiny Tapeout
+  board is also checked over ssh on the welland Pi it is plugged into.
 
 ## Approaches
 
@@ -145,6 +146,9 @@ survive port moves where the site gives them: USB serial, board type, FPGA part.
 - A claim is refused when another live claim exists, or when the board's in-use check says
   "in use"/"unknown" — unless the caller passes `override_reason`, which is recorded in the
   claim and shown to others.
+- One claim per Pi (2026-11-27, 2026-11-27-tt-boards-over-ssh-design.md): a Tiny Tapeout board's claim records the welland
+  Pi it is plugged into (`host`), and a claim on the board and one on that Pi exclude each
+  other.
 
 ### Tools (8)
 
@@ -179,6 +183,10 @@ X until 15:40; ask the user or pick another board").
   plain `ssh fo-…` to work.
 - Masters are started with `ssh -F <config> -MNf <alias>`; status with `-O check`; closed
   with `-O exit` before a power-cycle.
+- A Tiny Tapeout board has no master of its own: `connect` and `run` use the master of the
+  welland Pi its live board page names (`data-switch`/`data-port`), and say which (`host`).
+  A Pi that carries only a chip board is not listed by welland (its page is a 404), so its
+  password is the site-wide one from a listed Pi's page (2026-11-27, 2026-11-27-tt-boards-over-ssh-design.md).
 
 ### Cache
 
@@ -194,7 +202,10 @@ X until 15:40; ask the user or pick another board").
 The broker runs the stage 1 in-use script (shipped as package data, kept identical to the
 one in `in-use.md` by a test) over the master, excluding the broker's own connection, and
 the Tiny Tapeout rule against `status.json`. Verdicts: `idle`, `in use`, `unknown`, plus
-the local claim. Callers treat `unknown` as `in use`.
+the local claim. Callers treat `unknown` as `in use`. Since 2026-11-27 (2026-11-27-tt-boards-over-ssh-design.md) a Tiny
+Tapeout board gets both: the script on its welland Pi and the site rule, combined (in use if
+either says so, else unknown if either does, else idle); a welland Pi that carries a Tiny
+Tapeout board gets that board's site rule as well.
 
 **The claim holder's own activity.** For the holder of a live claim, two signals are
 discounted because they are the holder's own doing: `~/Uploads` changes newer than the

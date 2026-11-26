@@ -1,7 +1,8 @@
 # Logging in to a board host
 
 welland and ps1 hosts accept ssh as user `pi` with a shared password, on a per-host port.
-The Tiny Tapeout site has no ssh (use its web API, tinytapeout.md). The host is a
+Every Tiny Tapeout board is plugged into a welland Pi, which takes ssh like the others
+("Tiny Tapeout boards" below; the board's web API is in tinytapeout.md). The host is a
 Raspberry Pi with the board's USB devices attached; its root is a 451 MB RAM overlay, so
 **everything you write is lost when the host restarts or is power-cycled**. Put files in
 `~/Uploads` while you work and copy results back to your machine.
@@ -20,6 +21,15 @@ Pick a host from the offered list first (boards.md) and check it is not in use (
 Both IPv4 and IPv6 work on welland. The board page's "IPv4 only, use `-4`" text is stale;
 copying its `-4` command also works. From a machine inside welland's own network the host
 may see the router's address as your client address.
+
+### Tiny Tapeout boards
+
+The Tiny Tapeout board page names its Pi: `data-switch="<S>" data-port="<P>"` is welland
+`pi-sw<S>-p<P>` (tinytapeout.md, "The board's Pi"); empty attributes mean the board is not
+connected. Read the page each time, since boards move between Pis. The port follows from the
+name as above (`pi-sw2-p7` is port `20722`). A Pi whose only board is a chip board is not
+listed by welland, so `/fpgas/pi-sw2-p7.html` is HTTP 404; the password is the same on every
+welland Pi, so the `welland.pw` read below from `pi-sw1-p2` works for it too.
 
 ## Read the password from the board page
 

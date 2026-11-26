@@ -1,14 +1,15 @@
 ---
 name: fpgas-online
-description: Guidance and copy-and-run command examples for using the shared FPGA and Tiny Tapeout boards on fpgas.online (sites welland, ps1 and tinytapeout). Covers listing boards and spotting missing ones, logging in over ssh to a board's host, power-cycling a board and waiting for it, checking whether someone is using a board, and driving Tiny Tapeout boards over the web API. Use when connecting to, resetting, flashing or checking boards on fpgas.online, welland, ps1 or tinytapeout.
+description: Guidance and copy-and-run command examples for using the shared FPGA and Tiny Tapeout boards on fpgas.online (sites welland, ps1 and tinytapeout). Covers listing boards and spotting missing ones, logging in over ssh to a board's host (a Tiny Tapeout board's welland Pi included), power-cycling a board and waiting for it, checking whether someone is using a board, and driving Tiny Tapeout boards over the web API. Use when connecting to, resetting, flashing or checking boards on fpgas.online, welland, ps1 or tinytapeout.
 ---
 
 # Using the boards on fpgas.online
 
 fpgas.online is a set of remote FPGA and Tiny Tapeout boards that anyone may use, shared
 between people (web terminal on each board's page) and other agents. Three sites run it:
-welland, ps1 and tinytapeout. A board is attached to a Raspberry Pi "host"; on welland and
-ps1 you log in to the host over ssh, on tinytapeout you use a web API. This skill covers
+welland, ps1 and tinytapeout. A board is attached to a Raspberry Pi "host" that you log in
+to over ssh; a Tiny Tapeout board is plugged into a welland Pi and also has a web API on the
+tinytapeout site (a skin over the same fpgas.online interface). This skill covers
 using boards, not running the infrastructure. Everything below needs only `curl`, `jq` and
 `ssh`.
 
@@ -18,9 +19,9 @@ using boards, not running the infrastructure. Everything below needs only `curl`
 | --- | --- | --- | --- |
 | URL | https://welland.fpgas.online | https://ps1.fpgas.online | https://tinytapeout.fpgas.online |
 | Board list | `/fleet/registry.json`: every machine, with `condition` and `offered`, including `missing` and `attention` ones | only the page `/fpgas/` of offered hosts; no registry, so absence says nothing | home page links `/board/<slug>/`; `status.json` says if one is connected |
-| ssh | yes, user `pi`, port `<switch><2-digit port>22` (`pi-sw1-p2` is 10222), IPv4 and IPv6 | yes, user `pi`, port `(100+N)*100+22` (`pi3` is 10322) | none |
+| ssh | yes, user `pi`, port `<switch><2-digit port>22` (`pi-sw1-p2` is 10222), IPv4 and IPv6 | yes, user `pi`, port `(100+N)*100+22` (`pi3` is 10322) | on the board's welland Pi, which the board page names (tinytapeout.md) |
 | Power-cycle | `POST /snmp/toggle`, then a 60 s hold (429 inside it); the host reboots | same endpoint, no hold; the switch cycles the named port, but many ps1 hosts have no PoE HAT and do not lose power: check the boot id, and if it is unchanged tell the user to reset the host by hand | `POST /snmp/toggle` through the site (port from the board page) |
-| In use | read on the host over ssh (logins, tmux clients, idle times) | same, over ssh | `status.json`: `clients` and `idle_display` |
+| In use | read on the host over ssh (logins, tmux clients, idle times) | same, over ssh | `status.json` (`clients`, `idle_display`) and the ssh check on its Pi |
 | Other | `cameras` in the registry | board page | designs, bitstream upload and serial bridge (state-changing parts not yet exercised live) |
 
 Each welland and ps1 host has a page `/fpgas/<hostname>.html`; the ssh password is shared

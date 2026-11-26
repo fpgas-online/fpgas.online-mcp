@@ -272,7 +272,13 @@ count, not the connection list.
 
 ## tinytapeout
 
-No ssh. The board's own daemon reports who is attached. One GET:
+A Tiny Tapeout board is checked twice, at the same time: the ssh check above, on the welland
+Pi the board is plugged into (tinytapeout.md, "The board's Pi", says how to find it), and the
+site's own rule below. **In use** if either says in use, else **unknown** if either says
+unknown, else **idle**. A board page that names no Pi means the board is not connected:
+unknown.
+
+The site rule: the board's own daemon reports who is attached. One GET:
 
 ```sh
 S=fpga-2
@@ -301,10 +307,19 @@ slug with no board `{"reachable":false,"clients":null,"idle":null}` (the respons
   to come back; treat it as in use and ask the user. `left: the SDK is not running` is the
   state the Pi's boot check leaves (no SDK started); treat it the same way. `board not
   present` and `failed: ...` are not idle either. A chip board always says `not an fpga
-  board` (checked live), so it is never idle by this rule: ask the user before touching one.
+  board` (checked live), so this state says nothing about a chip board: it has its own rule
+  below.
   `idle_display` is `null` only when the board is not reachable.
-- **Idle** is `reachable: true`, `clients: 0` and `idle_display.state` `loaded` on two reads
-  at least 15 s apart. Anything else is not idle.
+- **Idle** (FPGA board) is `reachable: true`, `clients: 0` and `idle_display.state` `loaded`
+  on two reads at least 15 s apart. Anything else is not idle.
+- **Idle** (chip board) is `reachable: true` and `clients: 0` on two reads at least 15 s
+  apart; `idle_display.state` is not used. `clients` above 0 is in use; anything unreadable
+  is unknown.
+- **A welland Pi that carries a Tiny Tapeout board** (a registry board whose `type` starts
+  with `TT`) is in use when that board is: the registry board's `id` is the board's USB serial
+  (`board.usb_serial` in `status.json`), which finds its slug; apply the site rule as well as
+  the ssh check. A web visitor on the Tiny Tapeout page then counts for the Pi too. A board
+  the Tiny Tapeout site does not list leaves only the ssh check: say so.
 
 Nothing is changed by these GETs; poll at most every 10 s.
 

@@ -105,7 +105,9 @@ Prints `data-port="..."` and `data-switch="..."`; both are empty (`""`) when no 
 connected to that slug, in which case there is nothing to cycle. Then POST that port and
 switch to `https://tinytapeout.fpgas.online/snmp/toggle`, as above. The button is hidden
 and the page has no controls for a slug without a port. Only cycle a board that
-in-use.md's Tiny Tapeout rule calls idle.
+in-use.md's Tiny Tapeout check calls idle. The same switch and port name the board's welland
+Pi (`pi-sw<switch>-p<port>`, which the cycle restarts): close your ssh master to it first, as
+for any welland host.
 
 ## The hold: reading 429 and `Retry-After`
 
