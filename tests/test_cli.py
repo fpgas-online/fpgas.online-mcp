@@ -99,7 +99,9 @@ async def test_errors_go_to_stderr(stack, capsys):
 
 async def test_broker_status_and_stop_idle(stack, capsys):
     code, out, _ = await cli(capsys, "broker", "status")
-    assert code == 0 and f"version {fpgas_online_mcp.__version__}" in out and "pid " in out and "started " in out
+    assert code == 0 and f"version {fpgas_online_mcp.__version__}" in out and "pid " in out
+    started = out.split("started ", 1)[1].splitlines()[0]
+    assert re.fullmatch(r"\d\d:\d\d UTC", started), started  # not a raw Unix timestamp
     code, out, _ = await cli(capsys, "broker", "status", "--json")
     assert json.loads(out)["version"] == fpgas_online_mcp.__version__
     code, out, _ = await cli(capsys, "broker", "stop")
