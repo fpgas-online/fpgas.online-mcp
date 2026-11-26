@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from fpgas_online_mcp.boards import BoardId
+from fpgas_online_mcp.boards import BoardId, ssh_port
 from fpgas_online_mcp.sites import BoardPage
-from fpgas_online_mcp.ssh import SshManager, wrap_untrusted
+from fpgas_online_mcp.ssh import PortMismatch, SshManager, wrap_untrusted
 
 SECRET = "s3cr3tpw"
 HERE = Path(__file__).parent
@@ -26,10 +26,11 @@ TMP = HERE.parent / "tmp"
 class FakeSites:
     def __init__(self):
         self.calls = 0
+        self.port: int | None = None  # None: the port the name gives
 
     async def board_page(self, site, name):
         self.calls += 1
-        return BoardPage(password=SECRET, ssh_port=10222 if site == "welland" else 10322)
+        return BoardPage(password=SECRET, ssh_port=self.port or ssh_port(site, name))
 
 
 @pytest.fixture
@@ -123,6 +124,24 @@ async def test_multiple_boards_in_one_config(env):
     assert text.count("Host fpgas-") == 2
     assert "HostName ps1.fpgas.online" in text and "Port 10322" in text
     assert (cfg / "ps1.pw").exists()
+
+
+async def test_page_port_disagreeing_with_name_is_refused(env):
+    mgr, sites, cfg, log = env
+    sites.port = 10322  # another board's port on the page of pi-sw1-p2
+    with pytest.raises(PortMismatch, match="10322.*10222"):
+        await mgr.ensure_master(BOARD)
+    with pytest.raises(PortMismatch):
+        await mgr.run(BOARD, "true", 5)
+    assert not any("-MNf" in e["argv"] for e in entries(log))
+    assert not (cfg / "ssh_config").exists()
+
+
+async def test_name_without_port_pattern_is_refused(env):
+    mgr, sites, cfg, log = env
+    with pytest.raises(PortMismatch, match="from its name"):
+        await mgr.ensure_master(BoardId("welland", "oddhost"))
+    assert sites.calls == 0
 
 
 async def test_tinytapeout_has_no_ssh(env):

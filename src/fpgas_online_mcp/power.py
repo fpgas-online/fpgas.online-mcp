@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import inuse
-from .boards import Board
+from .boards import Board, switch_port
 from .claims import Claim
 from .sites import SiteError
 
@@ -29,8 +29,6 @@ NOT_POE = (
 )
 NO_RETURN = "the board did not come back within 5 minutes: do not cycle it again, ask the user"
 
-_WELLAND_NAME = re.compile(r"pi-sw([0-9]+)-p([0-9]+)")
-_PS1_NAME = re.compile(r"pi([0-9]+)")
 _BOOT_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
 
 
@@ -90,16 +88,11 @@ async def _tt_uptime(sites, name: str) -> float | None:
 
 async def _toggle_args(board: Board, sites) -> tuple[str, int | None] | str:
     """(port, switch) for the toggle body, or a refusal message."""
-    if board.site == "welland":
-        m = _WELLAND_NAME.fullmatch(board.name)
-        if not m:
+    if board.site in ("welland", "ps1"):
+        target = switch_port(board.site, board.name)
+        if target is None:
             return f"cannot work out the switch port from the name {board.name!r}"
-        return str(int(m[2])), int(m[1])
-    if board.site == "ps1":
-        m = _PS1_NAME.fullmatch(board.name)
-        if not m:
-            return f"cannot work out the switch port from the name {board.name!r}"
-        return str(int(m[1])), None
+        return str(target[0]), target[1]
     page = await sites.board_page("tinytapeout", board.name, live=True)
     if not page.tt_port or not page.tt_switch:
         return "the board page names no switch port: nothing to cycle"

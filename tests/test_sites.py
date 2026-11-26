@@ -126,6 +126,20 @@ async def test_board_page_tinytapeout(client):
     assert page == BoardPage(tt_port="11", tt_switch="2")
 
 
+async def test_board_page_port_ignores_other_port_mentions(client, site):
+    page = (FIX / "welland_board.html").read_text()
+    site.override[("welland.fpgas.online", "/fpgas/pi-sw1-p2.html")] = httpx.Response(
+        200, text=page.replace("<body>", "<body><p>sshd listens on port 22 inside; see port 10322 too</p>", 1)
+    )
+    assert (await client.board_page("welland", "pi-sw1-p2")).ssh_port == 10222
+
+
+async def test_board_page_disagreeing_port_lines_give_no_port(client, site):
+    page = (FIX / "welland_board.html").read_text().replace("-p 10222 pi@", "-p 10322 pi@")
+    site.override[("welland.fpgas.online", "/fpgas/pi-sw1-p2.html")] = httpx.Response(200, text=page)
+    assert (await client.board_page("welland", "pi-sw1-p2")).ssh_port is None
+
+
 async def test_password_not_in_repr(client):
     page = await client.board_page("welland", "pi-sw1-p2")
     assert "REDACTED" not in repr(page)

@@ -21,7 +21,7 @@ from .broker import Broker, Conn
 from .claims import Claim, ClaimConflict, ClaimStore
 from .protocol import BrokerError
 from .sites import SiteClient, SiteError
-from .ssh import SshManager, defuse, wrap_untrusted
+from .ssh import PortMismatch, SshManager, defuse, wrap_untrusted
 
 log = logging.getLogger(__name__)
 
@@ -380,6 +380,8 @@ async def op_connect(state: State, args: dict, conn: Conn) -> dict:
     claim = _claim_for(state, board, args, conn)
     try:
         info = await state.ssh.ensure_master(board.id)
+    except PortMismatch as e:
+        raise BrokerError("port_mismatch", f"{e}; tell the user") from e
     except ValueError as e:
         raise BrokerError("no_ssh", f"{e}; use board_status and the guide topic tinytapeout") from e
     except (RuntimeError, SiteError) as e:
@@ -414,6 +416,8 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
     _claim_for(state, board, args, conn)
     try:
         r = await state.ssh.run(board.id, command, timeout_s)
+    except PortMismatch as e:
+        raise BrokerError("port_mismatch", f"{e}; tell the user") from e
     except ValueError as e:
         raise BrokerError("no_ssh", str(e)) from e
     except (RuntimeError, SiteError) as e:

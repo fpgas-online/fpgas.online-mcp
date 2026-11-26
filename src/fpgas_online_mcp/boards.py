@@ -1,6 +1,7 @@
 """Board identity and the merged inventory of the three sites. Read-only: no ssh, no in-use checks."""
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 
 from .cache import Entry
@@ -11,6 +12,9 @@ NOTES = {
     "ps1": "only hosts offered now; absence says nothing",
     "tinytapeout": "catalogue; condition from status.json",
 }
+
+_WELLAND_NAME = re.compile(r"pi-sw([0-9]+)-p([0-9]+)")
+_PS1_NAME = re.compile(r"pi([0-9]+)")
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,31 @@ class BoardId:
         if not candidates:
             raise ValueError(f"no such board {s!r}; use list_boards")
         raise ValueError(f"{s!r} is ambiguous; use one of: {', '.join(str(b) for b in candidates)}")
+
+
+def switch_port(site: str, name: str) -> tuple[int, int | None] | None:
+    """(port, switch) a welland or ps1 board sits on, from its name (ps1 has one switch: None); else None.
+
+    welland `pi-sw<switch>-p<port>`, ps1 `pi<port>`. The power toggle and the ssh port both come from
+    here, so the port that is cycled and the host that ssh reaches can never disagree.
+    """
+    if site == "welland" and (m := _WELLAND_NAME.fullmatch(name)):
+        return int(m[2]), int(m[1])
+    if site == "ps1" and (m := _PS1_NAME.fullmatch(name)):
+        return int(m[1]), None
+    return None
+
+
+def ssh_port(site: str, name: str) -> int | None:
+    """The ssh port the site forwards to this board: welland `<switch><2-digit port>22` (pi-sw1-p2 ->
+    10222), ps1 `(100+N)*100+22` (pi3 -> 10322). None when the name does not follow the pattern."""
+    sp = switch_port(site, name)
+    if sp is None:
+        return None
+    port, switch = sp
+    if switch is None:
+        return (100 + port) * 100 + 22
+    return int(f"{switch}{port:02d}22") if switch > 0 and port < 100 else None
 
 
 @dataclass(frozen=True)

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import paths
-from .boards import BoardId
+from .boards import BoardId, ssh_port
 
 SITE_HOSTS = {"welland": "welland.fpgas.online", "ps1": "ps1.fpgas.online"}
 START_TIMEOUT_S = 30.0
@@ -39,6 +39,10 @@ _CSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]?")
 _ESC = re.compile(r"\x1b[ -/]*[0-~]?")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _CLOSER = re.compile(r"</\s*board-output", re.IGNORECASE)
+
+
+class PortMismatch(RuntimeError):
+    """The board page's ssh port is not the one the board's name gives: refuse rather than reach another host."""
 
 
 @dataclass(frozen=True)
@@ -262,14 +266,22 @@ class SshManager:
         async with self._locks.setdefault(str(board), asyncio.Lock()):
             if await self.check(board):
                 return self._info(board)
+            expected = ssh_port(board.site, board.name)
+            if expected is None:
+                raise PortMismatch(f"cannot work out the ssh port of {board} from its name; not connecting")
             page = await self._sites.board_page(board.site, board.name)
             if not page.password or page.ssh_port is None:
                 raise RuntimeError(f"the board page of {board} gave no ssh password or port")
+            if page.ssh_port != expected:
+                raise PortMismatch(
+                    f"the board page of {board} gives ssh port {page.ssh_port} but the name means port {expected}; "
+                    "not connecting, since that could reach another board's host"
+                )
             password = page.password
             _write_private(self._config_dir / f"{board.site}.pw", password, 0o600)
             _write_private(self._config_dir / "askpass", ASKPASS, 0o700)
             blocks = self._load_blocks()
-            blocks[self.alias(board)] = self._block(board, page.ssh_port)
+            blocks[self.alias(board)] = self._block(board, expected)
             _write_private(self.config_path, "\n".join(blocks.values()), 0o600)
 
             env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}

@@ -7,7 +7,7 @@ import httpx
 import pytest
 from test_sites import FIX, client, clock, site  # noqa: F401  (fixtures)
 
-from fpgas_online_mcp.boards import BoardId, inventory
+from fpgas_online_mcp.boards import BoardId, inventory, ssh_port, switch_port
 
 
 def by_id(inv):
@@ -101,3 +101,13 @@ def test_parse_errors():
         BoardId.parse("ps1:nope", KNOWN)
     with pytest.raises(ValueError, match="unknown site"):
         BoardId.parse("mars:pi3", KNOWN)
+
+
+def test_ports_from_names():
+    assert ssh_port("welland", "pi-sw1-p2") == 10222
+    assert ssh_port("welland", "pi-sw2-p14") == 21422
+    assert ssh_port("welland", "pi-sw01-p02") == 10222
+    assert ssh_port("ps1", "pi3") == 10322 and ssh_port("ps1", "pi23") == 12322
+    for s, name in (("welland", "pi-sw1-p2x"), ("ps1", "raspberry"), ("tinytapeout", "fpga-2"), ("welland", "pi3")):
+        assert ssh_port(s, name) is None and switch_port(s, name) is None
+    assert switch_port("welland", "pi-sw2-p9") == (9, 2) and switch_port("ps1", "pi7") == (7, None)

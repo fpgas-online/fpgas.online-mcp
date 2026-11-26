@@ -103,8 +103,11 @@ def _parse_board_page(site: str, data: bytes) -> BoardPage:
         raise ValueError("password parameter is not base64") from exc
     if not password:
         raise ValueError("empty password")
-    port = re.search(r"\bport (\d+)\b", text)
-    return BoardPage(password=password, ssh_port=int(port[1]) if port else None)
+    # Only the "Use your own ssh client ... host: <site>.fpgas.online, port N" line and the
+    # "ssh [-4] -p N pi@<site>.fpgas.online" command count; they must agree.
+    ports = set(re.findall(r"host:\s*[\w.-]+\.fpgas\.online,\s*port (\d+)\b", text))
+    ports |= set(re.findall(r"\bssh (?:-\w+ )*-p (\d+) pi@[\w.-]+\.fpgas\.online\b", text))
+    return BoardPage(password=password, ssh_port=int(ports.pop()) if len(ports) == 1 else None)
 
 
 class SiteClient:

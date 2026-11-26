@@ -362,6 +362,16 @@ async def test_connect_and_run(stack):
         assert body == '<board-output untrusted="true">hello\n</board-output>'
 
 
+async def test_connect_refuses_a_page_port_that_disagrees_with_the_name(stack):
+    page = (HERE / "fixtures" / "welland_board.html").read_text().replace("10222", "10322")
+    stack.site.override[("welland.fpgas.online", "/fpgas/pi-sw1-p2.html")] = httpx.Response(200, text=page)
+    async with stack.session() as c:
+        ok(await call(c, "claim_board", board=WELLAND, purpose="test"))
+        text = err(await call(c, "connect", board=WELLAND))
+        assert "10322" in text and "10222" in text and "not connecting" in text
+        assert "not connecting" in err(await call(c, "run", board=WELLAND, command="true"))
+
+
 async def test_run_output_limit_and_wrapping(stack):
     async with stack.session() as c:
         ok(await call(c, "claim_board", board="ps1:pi3", purpose="test"))
