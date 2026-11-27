@@ -318,7 +318,10 @@ def not_offered(board: Board) -> str:
     head = f"welland does not offer {board.id} (condition {board.condition}); "
     why = _why_not_unoffered(board)
     if why is None:
-        return head + "if the user wants it anyway and it is up, pass allow_unoffered"
+        text = head + "if the user wants it anyway and it is up, pass allow_unoffered"
+        if carries_tt(board):
+            text += "; or claim its Tiny Tapeout board instead, which reaches this Pi without the option"
+        return text
     if board.setup_port:
         why = "it is on the setup port (being set up)"
     elif board.condition == "missing":

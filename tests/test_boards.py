@@ -251,3 +251,11 @@ async def test_port_facts_unreadable_is_none(client, site):  # noqa: F811
         200, json={"switches": [{"index": 1, "ports": [{"port": 2, "link_up": "yes", "poe_state": 3, "watts": "x"}]}]}
     )
     assert await port_facts(client, "pi-sw1-p2") == {"link_up": None, "poe_state": None, "watts": None}
+
+
+async def test_not_offered_of_a_pi_with_a_tt_board_also_points_to_the_board(client):  # noqa: F811
+    boards = by_id(await inventory(client, "welland"))
+    text = not_offered(boards["welland:pi-sw2-p11"])  # attention, carries a TT chip
+    assert text.startswith("welland does not offer welland:pi-sw2-p11 (condition attention); if the user wants")
+    assert text.endswith("; or claim its Tiny Tapeout board instead, which reaches this Pi without the option")
+    assert "Tiny Tapeout" not in not_offered(boards["welland:pi-sw1-p10"])
