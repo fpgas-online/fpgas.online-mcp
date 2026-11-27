@@ -47,6 +47,15 @@ Section = Literal[SECTIONS + ("all",)]
 BoardArg = Annotated[
     str, Field(description="Board id '<site>:<name>', e.g. 'welland:pi-sw1-p2' (a bare name works when unique)")
 ]
+AllowUnofferedArg = Annotated[
+    bool,
+    Field(
+        description="Only when the user asks for it: also reach a welland Pi that is up (condition operational "
+        "or attention) but that the site does not offer; such a Pi may be under maintenance. Not for missing "
+        "Pis, Pis on the setup port, ps1 or Tiny Tapeout boards. A claim keeps it for connect, run and "
+        "power_cycle."
+    ),
+]
 ClaimArg = Annotated[
     str | None,
     Field(description="Your claim_id from claim_board. Optional in this session; pass it after a restart."),
@@ -170,6 +179,8 @@ class Frontend:
 
     async def tool(self, op: str, max_bytes: int = LIMIT, **args: Any) -> CallToolResult:
         args = {k: v for k, v in args.items() if v is not None}
+        if not args.get("allow_unoffered"):  # sent only when on: a broker from before it gets what it knows
+            args.pop("allow_unoffered", None)
         if op in CLAIM_OPS:
             args["claim_ids"] = list(self.claim_ids)
         try:
@@ -182,6 +193,9 @@ class Frontend:
             self.claim_ids.append(result["claim_id"])
         if op == "release_board" and result["released"] in self.claim_ids:
             self.claim_ids.remove(result["released"])
+        warning = client.ignored_option(op, args, result)
+        if warning:
+            result = {**result, "warning": warning}
         failed = op == "power_cycle" and not result.get("ok")
         return _result(_render(result, max_bytes), is_error=failed)
 
@@ -230,8 +244,9 @@ def build_server(fe: Frontend) -> MCPServer:
     async def board_status(
         board: BoardArg,
         check_use: Annotated[bool, Field(description="Run the live in-use check (slow on Tiny Tapeout)")] = True,
+        allow_unoffered: AllowUnofferedArg = False,
     ) -> CallToolResult:
-        return await fe.tool("board_status", board=board, check_use=check_use)
+        return await fe.tool("board_status", board=board, check_use=check_use, allow_unoffered=allow_unoffered)
 
     async def claim_board(
         board: BoardArg,
@@ -241,6 +256,7 @@ def build_server(fe: Frontend) -> MCPServer:
             str | None, Field(description="Only when the user agreed to take a board that looks in use: why")
         ] = None,
         claim_id: Annotated[str | None, Field(description="Renew this claim instead of taking a new one")] = None,
+        allow_unoffered: AllowUnofferedArg = False,
     ) -> CallToolResult:
         return await fe.tool(
             "claim_board",
@@ -249,6 +265,7 @@ def build_server(fe: Frontend) -> MCPServer:
             minutes=minutes,
             override_reason=override_reason,
             claim_id=claim_id,
+            allow_unoffered=allow_unoffered,
         )
 
     async def release_board(
@@ -348,8 +365,10 @@ def build_server(fe: Frontend) -> MCPServer:
             "Details of one board: inventory facts, local claim and, unless check_use is false, a live in-use "
             "check with its signals (verdict idle, in use or unknown; treat unknown as in use). A Tiny Tapeout "
             "board also shows the welland Pi it is plugged into (host), and is checked both on the site and over "
-            "ssh on that Pi. The check takes up to about 30 s over ssh, and up to about 3 minutes on Tiny Tapeout "
-            "(it must see the board idle twice).",
+            "ssh on that Pi. A welland Pi also shows its boot check, boards, fleet_page (why it is or is not "
+            "offered) and switch_port (link, PoE state, watts; read only). allow_unoffered (only when the user asks) "
+            "checks a welland Pi that is up but not offered. The check takes up to about 30 s over ssh, and up to "
+            "about 3 minutes on Tiny Tapeout (it must see the board idle twice).",
             _hints(True, True, True, title="Board status"),
         ),
         (
@@ -359,7 +378,9 @@ def build_server(fe: Frontend) -> MCPServer:
             "unless the board is idle, or if someone else holds it or a board on the same Pi. A Tiny Tapeout "
             "board's claim holds the welland Pi it is on now; if the board moves, connect, run and power_cycle "
             "refuse until you release and claim it again. Returns a claim_id; claiming again renews it (no new "
-            "check). Default 30 minutes, at most 240.",
+            "check). Default 30 minutes, at most 240. welland offers only Pis whose boot check passed; to use one "
+            "that is up but not offered, pass allow_unoffered, only when the user asks for it: the claim keeps it "
+            "(connect, run and power_cycle use it) and shows it to others.",
             _hints(False, True, False, destructive=False, title="Claim a board"),
         ),
         (

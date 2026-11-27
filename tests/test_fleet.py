@@ -204,7 +204,7 @@ def test_switch_ports_every_port():
     assert set(s1) == {"index", "name", "model", "status", "read_at", "known_issues", "empty_ports"}
     assert s1["name"] == "sw-netgear-gsm7252ps-s2" and s1["known_issues"][0]["issue"] == "poe #16"
     assert r["columns"] == fleet.PORT_COLUMNS
-    assert r["total"] == 8 and len(r["ports"]) == 8 and "next" not in r
+    assert r["total"] == 9 and len(r["ports"]) == 9 and "next" not in r
     p2 = next(p for p in rows(r) if (p["switch"], p["port"]) == (1, 2))
     assert p2 == {
         "switch": 1,
@@ -254,10 +254,10 @@ def test_switch_ports_of_a_board():
 
 def test_switch_ports_paged_and_cut_at_the_limit(monkeypatch):
     page = fleet.switch_ports(switches(), HOSTNAMES, limit=3, offset=2)
-    assert page["total"] == 8 and page["offset"] == 2 and len(page["ports"]) == 3 and page["next"] == 5
+    assert page["total"] == 9 and page["offset"] == 2 and len(page["ports"]) == 3 and page["next"] == 5
     monkeypatch.setattr(fleet, "LIMIT", 2500)
     cut = fleet.switch_ports(switches(), HOSTNAMES)
-    assert size(cut) <= 2500 and len(cut["ports"]) < 8
+    assert size(cut) <= 2500 and len(cut["ports"]) < 9
     assert cut["next"] == len(cut["ports"]) and f"offset={cut['next']}" in cut["more"]
 
 

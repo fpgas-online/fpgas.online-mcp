@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import __version__
-from .client import BrokerClient, BrokerError, connect, version_tuple
+from .client import BrokerClient, BrokerError, connect, ignored_option, version_tuple
 from .fleet import SECTIONS
 from .protocol import PROTOCOL
 
@@ -63,7 +63,14 @@ def _presence(c: dict) -> str:
 
 
 def _claim_text(c: dict) -> str:
-    return f"{c.get('holder')} until {hhmm(c.get('expires'))} UTC ({c.get('purpose')})"
+    unoffered = " (allow_unoffered)" if c.get("allow_unoffered") else ""
+    return f"{c.get('holder')} until {hhmm(c.get('expires'))} UTC ({c.get('purpose')}){unoffered}"
+
+
+def _port_text(p: dict) -> str:
+    link = {True: "link up", False: "link down"}.get(p.get("link_up"), "link unknown")
+    watts = f", {p['watts']:g} W" if isinstance(p.get("watts"), int | float) else ""
+    return f"{link}, PoE {p.get('poe_state') or 'unknown'}{watts}"
 
 
 # --- formatters (result of the op -> text) --------------------------------------------------------
@@ -109,8 +116,24 @@ def fmt_status(r: dict) -> str:
             lines.append(f"  {key}: {b[key]}")
     if b.get("stale"):
         lines.append("  (site data is stale)")
+    if b.get("boot_check"):
+        lines.append(f"  boot check: {b['boot_check'].get('result') or '-'} at {b['boot_check'].get('at') or '-'}")
+    for board in b.get("boards", []):
+        tests = ", ".join(f"{k} {v}" for k, v in (board.get("tests") or {}).items())
+        lines.append(
+            f"  board {board.get('type') or '-'}: {board.get('result') or '-'}" + (f" ({tests})" if tests else "")
+        )
+    if b.get("cut"):
+        lines.append(f"  ({b['cut']})")
+    if b.get("switch_port"):
+        lines.append(f"  switch port: {_port_text(b['switch_port'])}")
+    if b.get("fleet_page"):
+        lines.append(f"  fleet page: {b['fleet_page']}")
     if b.get("claim"):
         lines.append(f"  claim {b['claim']['claim_id']}: {_claim_text(b['claim'])}")
+    for key in ("offered_note", "not_offered", "warning"):
+        if r.get(key):
+            lines.append(f"note: {r[key]}")
     v = r.get("in_use")
     if v:
         lines.append(f"in use: {v['verdict']} (as of {v['as_of']})")
@@ -130,7 +153,7 @@ def fmt_claims(r: dict) -> str:
             c["claim_id"],
             c["holder"] + _presence(c),
             f"{hhmm(c['expires'])} UTC",
-            c["purpose"],
+            c["purpose"] + (" (allow_unoffered)" if c.get("allow_unoffered") else ""),
         ]
         for c in r["claims"]
     ]
@@ -144,6 +167,13 @@ def fmt_claim(r: dict) -> str:
     ]
     if r.get("override_reason"):
         lines.append(f"override: {r['override_reason']}")
+    if r.get("allow_unoffered"):
+        lines.append(
+            "allow_unoffered: connect, run and power_cycle may reach this Pi although the site does not offer it"
+        )
+    for key in ("offered_note", "warning"):
+        if r.get(key):
+            lines.append(f"note: {r[key]}")
     if r.get("in_use"):
         lines.append(f"in-use check: {r['in_use']['verdict']}")
     lines.append(f"release with: fpgas-online release {r['claim_id']}")
@@ -269,6 +299,12 @@ async def _call(c: BrokerClient, op: str, **kw: Any) -> Any:
         ) from e
 
 
+def _warn(op: str, kw: dict, result: Any) -> Any:
+    """Add a warning when an older broker ignored allow_unoffered (see client.ignored_option)."""
+    warning = ignored_option(op, kw, result)
+    return {**result, "warning": warning} if warning else result
+
+
 async def _broker_op(args: argparse.Namespace) -> tuple[Any, Any]:
     """(result, formatter) for the board commands; connects (and starts the broker) as needed."""
     c = await connect(holder())
@@ -278,7 +314,10 @@ async def _broker_op(args: argparse.Namespace) -> tuple[Any, Any]:
                 kw = {k: v for k, v in (("site", args.site), ("condition", args.condition)) if v}
                 return await c.call("list_boards", **kw), fmt_boards
             case "status":
-                return await c.call("board_status", board=args.board), fmt_status
+                kw = {"board": args.board}
+                if args.allow_unoffered:
+                    kw["allow_unoffered"] = True
+                return _warn("board_status", kw, await c.call("board_status", **kw)), fmt_status
             case "claims":
                 return await c.call("claims"), fmt_claims
             case "claim":
@@ -287,7 +326,9 @@ async def _broker_op(args: argparse.Namespace) -> tuple[Any, Any]:
                     kw["minutes"] = args.minutes
                 if args.override_reason:
                     kw["override_reason"] = args.override_reason
-                return await c.call("claim_board", **kw), fmt_claim
+                if args.allow_unoffered:
+                    kw["allow_unoffered"] = True
+                return _warn("claim_board", kw, await c.call("claim_board", **kw)), fmt_claim
             case "release":
                 return await c.call("release_board", claim_id=args.claim_id), fmt_release
             case "fleet":
@@ -359,13 +400,20 @@ def _parser() -> argparse.ArgumentParser:
     sp = add("boards", "list boards")
     sp.add_argument("--site", help="only this site")
     sp.add_argument("--condition", help="only boards in this condition, e.g. missing, attention, 'not connected'")
-    add("status", "one board's details and in-use verdict").add_argument("board", help="e.g. welland:pi-sw1-p2")
+    unoffered = (
+        "also reach a welland Pi that is up but not offered (only when that is what you want: it may be under "
+        "maintenance)"
+    )
+    sp = add("status", "one board's details and in-use verdict")
+    sp.add_argument("board", help="e.g. welland:pi-sw1-p2")
+    sp.add_argument("--allow-unoffered", action="store_true", help=unoffered)
     add("claims", "list live claims")
     sp = add("claim", "claim a board")
     sp.add_argument("board")
     sp.add_argument("--minutes", type=int, help="1-240 (the broker defaults to 30)")
     sp.add_argument("--purpose", required=True)
     sp.add_argument("--override-reason", help="claim although the in-use check says busy (ask the user first)")
+    sp.add_argument("--allow-unoffered", action="store_true", help=unoffered + "; the claim keeps it")
     add("release", "release a claim").add_argument("claim_id")
     sp = add("fleet", "welland's fleet page of a board's Pi: why it is not offered, its checks, events, console")
     sp.add_argument("board", help="e.g. welland:pi-sw1-p2, or a Tiny Tapeout board (its Pi)")

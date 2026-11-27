@@ -5,11 +5,17 @@ pages have the site password replaced by `REDACTED` (base64 `UkVEQUNURUQ=` in th
 URL). The internal `hostname=` address in the `/wssh/` URL of the two
 ssh board pages is replaced by `192.0.2.1` (TEST-NET). The two contact e-mail
 addresses in `welland_fpgas.html` and `ps1_fpgas.html` are replaced by `user@example.org`.
-Nothing was trimmed, except where the table says so.
+Nothing was trimmed, except in the files captured or written on 2026-11-27 (below).
+
+Captured 2026-11-27, plain GETs, trimmed by a script to keep them small:
+`welland_registry_conditions.json` keeps three machines of the live registry (one each
+`operational`, `attention`, `missing`; it has the `setup_port` field the older capture lacks).
 
 `welland_switches_full.json` is switches.json of 27 November 2026 cut to eight ports (switch 1
 ports 1, 2, 10, 11, 14; switch 2 ports 2, 11, 42) and without the front-panel drawing fields;
-the port rows are whole, action fields included. `welland_machine.json` (pi-sw1-p2) and
+the port rows are whole, action fields included. Switch 2 port 38 (pi-sw2-p38) is a ninth row from
+a second capture of the same day, trimmed to `port`, `link_up`, `poe_state`, `watts`, `can_power`
+and a few fields of its machine. `welland_machine.json` (pi-sw1-p2) and
 `welland_machine_tt.json` (pi-sw2-p11, the Pi of `tt-ab2a48a7ee008dd9`) are written by hand from
 the `/fleet/<serial>/machine.json` contract (docs/superpowers/specs/2026-11-27-fleet-and-switches-tools-design.md,
 with the fields the site added as built: `machine_json` in fpgas.online-site)
@@ -24,6 +30,7 @@ addresses are documentation addresses, and the newest event is hostile text.
 | `welland_switches_full.json` | https://welland.fpgas.online/management/switches.json (trimmed) |
 | `welland_machine.json` | `/fleet/00000000cc479fd1/machine.json` (written from the contract) |
 | `welland_machine_tt.json` | `/fleet/00000000665fad00/machine.json` (written from the contract) |
+| `welland_registry_conditions.json` | https://welland.fpgas.online/fleet/registry.json (trimmed) |
 | `ps1_fpgas.html` | https://ps1.fpgas.online/fpgas/ |
 | `ps1_board.html` | https://ps1.fpgas.online/fpgas/pi3.html |
 | `tt_home.html` | https://tinytapeout.fpgas.online/ |

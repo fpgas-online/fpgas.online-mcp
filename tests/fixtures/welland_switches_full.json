@@ -558,6 +558,23 @@
      "empty": false
     },
     {
+     "port": 38,
+     "link_up": true,
+     "poe_state": "delivering",
+     "watts": "4.2",
+     "can_power": true,
+     "machines": [
+      {
+       "serial": "80ba29ff33528664",
+       "setup_port": false,
+       "url": "/fleet/80ba29ff33528664/",
+       "label": "Pi 5 1 GB 80ba29ff33528664",
+       "condition": "attention",
+       "board": "no board"
+      }
+     ]
+    },
+    {
      "port": 42,
      "port_title": "the switch labels this port eth-uplink.pi42.fpgas",
      "machines": [

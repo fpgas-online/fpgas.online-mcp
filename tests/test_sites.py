@@ -443,9 +443,12 @@ async def test_site_password_needs_a_listed_pi(client, site):
         await client.site_password("tinytapeout")
 
 
-async def test_welland_switches_cached_for_a_minute(client, site, clock):
+# --- switch ports (read-only) --------------------------------------------------------------------
+
+
+async def test_welland_switches_cached_like_the_registry(client, site, clock):
     switches, entry = await client.welland_switches()
-    assert [s["index"] for s in switches] == [1, 2] and entry.stale is False
+    assert [s["index"] for s in switches] == [1, 2]
     assert switches[0]["ports"][1]["poe_state"] == "delivering"
     clock.advance(59)
     await client.welland_switches()
@@ -453,6 +456,7 @@ async def test_welland_switches_cached_for_a_minute(client, site, clock):
     clock.advance(2)
     await client.welland_switches()
     assert site.count("/management/switches.json") == 2
+    assert all(r.method == "GET" for r in site.requests)
 
 
 async def test_welland_switches_503_names_the_sites_error(client, site):

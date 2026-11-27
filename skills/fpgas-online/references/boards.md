@@ -22,7 +22,8 @@ curl -sS -A fpgas-online-skill https://welland.fpgas.online/fleet/registry.json 
 Prints one tab-separated line per machine, for example
 `pi-sw1-p2	sw1 p2	operational	true	Fomu	2026-11-24T14:59:57.381093+00:00`.
 Top-level keys are `site`, `generated_at`, `machines[]`; each machine also has `serial`,
-`label`, `boards[]` (`label`, `type`, `id`, `result`, `tests`), `check`, `cameras`, `network`.
+`label`, `boards[]` (`label`, `type`, `id`, `result`, `tests`), `check` (the boot check's
+`result` and `at`), `setup_port`, `cameras`, `network`.
 
 Filter by board type (here Arty A7 boards that you may use):
 
@@ -46,6 +47,22 @@ the type for `Fomu`, `TT FPGA`, `TT chip`, `NeTV2`, `Acorn`, `PCIe card`.
 
 `offered` is `true` only for machines the site invites you to use. Use only `offered: true`
 (in practice also `operational`). A board that is not offered may be in someone else's hands.
+
+### Pis welland does not offer
+
+welland offers a Pi when its boot check passed. An `attention` Pi is up and takes ssh, but
+its check failed or found no board (it may be under maintenance): use one **only when the
+user asks**, and only for what they asked. With the fpgas-online MCP tools pass
+`allow_unoffered` to `board_status` and `claim_board` (the claim keeps it for `connect`,
+`run` and `power_cycle`, and shows it to others); without them, ssh in as usual (it has no
+`/fpgas/` page; same password: ssh.md, "A Pi welland does not offer"). Check it is not in use
+first (in-use.md). Not for a `missing` Pi (stopped checking in; a `routable` `network` block
+may be from an older report) or one with `setup_port: true` (being set up).
+
+Why a Pi is not offered: its fleet page `https://welland.fpgas.online/fleet/<serial>/` (the
+boot check history, the events of this boot and the kernel console; `board_status` gives the
+link, with `boot_check`, `boards` and `switch_port`). Switch ports (link, PoE power):
+https://welland.fpgas.online/management/ (read it only; never use its buttons).
 
 Each offered host has a page, `https://welland.fpgas.online/fpgas/<hostname>.html`, and an
 ssh port derived from `port` (`sw1 p2` is 10222; rule in ssh.md). The page list is the same
