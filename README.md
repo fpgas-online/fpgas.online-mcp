@@ -77,8 +77,11 @@ check passed. A Pi that is up but not offered (condition `attention`) still take
 ssh; `board_status` and `claim_board` reach one with `allow_unoffered`, which an
 agent should pass only when the user asks for it (the Pi may be under
 maintenance). The claim keeps the setting for `connect`, `run` and `power_cycle`
-and shows it to everyone; the results carry an `offered_note`. It is refused for
-a `missing` Pi, one on the setup port, and ps1 and Tiny Tapeout boards. Why a Pi
+and shows it to everyone; the results carry an `offered_note`. Without it, nothing
+reaches such a Pi over ssh. `claim_board` refuses the option for a `missing` Pi,
+one on the setup port, and ps1 and Tiny Tapeout boards (`board_status` ignores
+it there and says why), and `connect`, `run` and `power_cycle` refuse a claim
+whose Pi has since gone missing or onto the setup port. Why a Pi
 is not offered is on its fleet page, `https://welland.fpgas.online/fleet/<serial>/`
 (`board_status` gives the link).
 
