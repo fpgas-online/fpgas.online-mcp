@@ -282,7 +282,13 @@ async def _check_tt(board: Board, sites, claim: Claim | None, clock, sleep, now)
         if state == "in use":
             return _verdict("in use", [*claim_notes, "idle_display.state is 'in use'"])
         if state.startswith("left:"):
-            return _verdict("in use", [*claim_notes, _board_text(f"a design was left on the board ({state})")])
+            # A design left loaded is not someone using the board: with no client and no activity for the
+            # daemon's 60 s quiet time it is as idle as the idle display, and the next user replaces it.
+            note = [
+                *note,
+                _board_text(f"a design is still on the board ({state}): nobody is using it; yours replaces it"),
+            ]
+            state = "loaded"
         if state == "waiting":
             waiting += 1
             first_ok = None

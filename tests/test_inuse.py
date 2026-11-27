@@ -284,9 +284,26 @@ async def test_tt_loaded_then_waiting_is_not_idle_yet():
     assert v.verdict == "in use"
 
 
-@pytest.mark.parametrize("state", ["in use", "left: my_design", "left: the SDK is not running"])
-async def test_tt_in_use_states(state):
-    v, _, _ = await run_tt(tt(state))
+async def test_tt_in_use_state():
+    v, _, _ = await run_tt(tt("in use"))
+    assert v.verdict == "in use"
+
+
+@pytest.mark.parametrize("state", ["left: my_design", "left: the SDK is not running"])
+async def test_tt_left_design_is_idle_and_says_so(state):
+    """A design left loaded, with no client and nothing happening, is not someone using the board."""
+    v, _, sites = await run_tt(tt(state))
+    assert v.verdict == "idle"
+    assert sites.reads == 2  # the same two stable reads as `loaded`
+    assert any(state in s and "replaces it" in s for s in v.signals)
+
+
+async def test_tt_left_design_then_a_visitor_is_in_use():
+    v, _, _ = await run_tt(tt("left: my_design"), tt("in use"))
+    assert v.verdict == "in use"
+    v, _, _ = await run_tt(tt("left: my_design"), tt("left: my_design", clients=1))
+    assert v.verdict == "in use"
+    v, _, _ = await run_tt(tt("left: my_design"), tt("waiting"), tt("waiting"), tt("waiting"))
     assert v.verdict == "in use"
 
 
@@ -428,8 +445,6 @@ async def test_tt_holder_state_change_ignored():
 
 
 async def test_tt_holder_discount_needs_loaded_at_claim_and_does_not_cover_clients():
-    v, _, _ = await run_tt(tt("left: old"), c=ttc("left: old"))
-    assert v.verdict == "in use"
     v, _, _ = await run_tt(tt("waiting"), c=ttc(None))
     assert v.verdict == "in use"
     v, _, _ = await run_tt(tt("waiting", clients=2), c=ttc("loaded"))
