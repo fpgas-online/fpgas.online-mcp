@@ -139,6 +139,30 @@ def fallback(entry: dict, port: tuple[int | None, dict] | None, port_error: str 
     return data
 
 
+CLIP_START = 1024  # a string longer than this is the first cut when one item is too big
+CLIP_MIN = 64  # below this a section is left out instead
+_OPEN, _CLOSE = wrap_untrusted("").split("</", 1)[0], "</board-output>"
+
+
+def _clip(obj: Any, cap: int, page: str) -> Any:
+    """obj with every string longer than cap bytes cut to cap, marked with how much and where the rest is.
+    A wrapped (untrusted) string keeps its wrapper whole."""
+    if isinstance(obj, dict):
+        return {k: _clip(v, cap, page) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_clip(v, cap, page) for v in obj]
+    if not isinstance(obj, str):
+        return obj
+    wrapped = obj.startswith(_OPEN) and obj.endswith(_CLOSE)
+    inner = obj[len(_OPEN) : -len(_CLOSE)] if wrapped else obj
+    data = inner.encode()
+    mark = f"[\u2026 {len(data) - cap} bytes cut; full text on the page {page}]"
+    if len(data) <= cap + len(mark.encode()):
+        return obj
+    inner = data[:cap].decode(errors="ignore") + mark
+    return f"{_OPEN}{inner}{_CLOSE}" if wrapped else inner
+
+
 @dataclass
 class _Section:
     name: str
@@ -149,15 +173,24 @@ class _Section:
     asked: int = 0  # how many the caller asked for (shown before any cut)
     extra: dict | None = None  # console: its other fields
     dropped: bool = False
+    cap: int | None = None  # strings are cut to this many bytes (an item too big for the limit)
+    page: str = ""
 
     @property
     def paged(self) -> bool:
         return self.name in PAGED and isinstance(self.value, list)
 
+    def items(self) -> list:
+        items = self.value[: self.shown]
+        return items if self.cap is None else [_clip(i, self.cap, self.page) for i in items]
+
+    def largest_item(self) -> int:
+        return max((_size(i) for i in self.value[: self.shown]), default=0)
+
     def render(self) -> Any:
         if not self.paged:
-            return self.value
-        items = self.value[: self.shown]
+            return self.value if self.cap is None else _clip(self.value, self.cap, self.page)
+        items = self.items()
         if self.name in UNTRUSTED:
             items = wrap_untrusted("\n".join(_compact(i) for i in items)) if items else []
         if self.extra is not None:
@@ -211,8 +244,9 @@ def details(
     """The fleet_details result for these sections, at most LIMIT bytes.
 
     List sections are paged (newest first) with `paging` saying how many there are and the next
-    offset. Too long: the longest section is cut first (a list to fewer items, anything else left
-    out), and `cut` says what was cut and how to get it. `head` goes first (the board, its Pi, as_of).
+    offset. Too long: the longest section is cut first (a list to fewer items; text longer than the
+    rest allows cut, marked, with the page for the full text; left out only when that is not enough),
+    and `cut` says what was cut and how to get it. `head` goes first (the board, its Pi, as_of).
     """
     limit = DEFAULT_LIMIT if limit is None else limit
     serial = data.get("serial")
@@ -222,6 +256,8 @@ def details(
         head["as_of"] = data["generated_at"]
     unavailable = [s for s in sections if s in (data.get("unavailable") or [])]
     secs = [_section(n, data, names, offset, limit) for n in sections if n not in unavailable]
+    for s in secs:
+        s.page = page
 
     def build() -> dict:
         result = dict(head)
@@ -243,11 +279,20 @@ def details(
                     f"left out to fit {LIMIT // 1024} KB; call fleet_details with sections=['{s.name}'] alone, "
                     f"or see the page {page}"
                 )
-            elif s.paged and s.shown < s.asked:
-                cut[s.name] = (
-                    f"{s.shown} of {s.total} shown to fit {LIMIT // 1024} KB; for more call fleet_details with "
-                    f"sections=['{s.name}'], offset={s.offset + s.shown}, limit={max(1, s.shown)}"
-                )
+            else:
+                notes = []
+                if s.cap is not None:
+                    notes.append(
+                        f"long text cut to {s.cap} bytes per field to fit {LIMIT // 1024} KB; the full text is on "
+                        f"the page {page}"
+                    )
+                if s.paged and s.shown < s.asked:
+                    notes.append(
+                        f"{s.shown} of {s.total} shown to fit {LIMIT // 1024} KB; for more call fleet_details with "
+                        f"sections=['{s.name}'], offset={s.offset + s.shown}, limit={max(1, s.shown)}"
+                    )
+                if notes:
+                    cut[s.name] = "; ".join(notes)
         if cut:
             result["cut"] = cut
         if unavailable:
@@ -265,8 +310,12 @@ def details(
         if not live:
             break
         biggest = max(live, key=lambda s: _size(s.render()))
-        if biggest.paged and biggest.shown > 1:
+        if biggest.paged and biggest.cap is None and biggest.largest_item() > LIMIT // 4:
+            biggest.cap = CLIP_START  # one item alone would crowd out the rest: cut its long text first
+        elif biggest.paged and biggest.shown > 1:
             _shrink(biggest, build)
+        elif biggest.cap is None or biggest.cap > CLIP_MIN:
+            biggest.cap = CLIP_START if biggest.cap is None else biggest.cap // 2
         else:
             biggest.dropped = True
     return build()

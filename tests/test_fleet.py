@@ -141,7 +141,7 @@ def test_a_huge_section_is_cut_first_and_the_rest_kept():
 
 def test_a_section_too_big_to_cut_is_left_out_with_a_note():
     data = machine()
-    data["labels"]["notes"] = ["x" * 9000]
+    data["labels"]["notes"] = ["x" * 200] * 200  # many strings: cutting each does not make it fit
     r = fleet.details(data, ["machine", "labels"], HOSTNAMES)
     assert size(r) <= fleet.LIMIT and "labels" not in r and "machine" in r
     assert "labels" in r["cut"] and "sections=['labels']" in r["cut"]["labels"] and r["page"] in r["cut"]["labels"]
@@ -304,3 +304,38 @@ def test_lldp_name_is_untrusted_in_both_tools():
     assert wrapped_once(port["lldp_name"])
     empty = fleet.switch_ports(switches(), HOSTNAMES, switch=1, port=1)  # no LLDP neighbour: nothing to wrap
     assert dict(zip(empty["columns"], empty["ports"][0], strict=True))["lldp_name"] == ""
+
+
+# --- one item over the limit: its long strings are cut, the section and its paging stay ---------
+
+MARK = "bytes cut; full text on the page https://welland.fpgas.online/fleet/00000000cc479fd1/]"
+
+
+def test_a_huge_event_is_cut_not_dropped():
+    data = machine()
+    data["events"][29]["reason"] = "x" * 9000  # the newest event
+    r = fleet.details(data, ["events"], HOSTNAMES, limit=5)
+    assert size(r) <= fleet.LIMIT
+    assert r["paging"]["events"] == {"total": 30, "offset": 0, "shown": 5, "next": 5}
+    assert wrapped_once(r["events"]) and '"test-29"' in r["events"] and '"test-25"' in r["events"]
+    assert "[\u2026 " in r["events"] and MARK in r["events"]
+    assert "events" in r["cut"] and "page" in r["cut"]["events"]
+
+
+def test_a_huge_console_line_is_cut_not_dropped():
+    data = machine()
+    data["console"]["lines"][39]["text"] = "y" * 9000  # the newest line
+    r = fleet.details(data, ["console"], HOSTNAMES, limit=5)
+    assert size(r) <= fleet.LIMIT
+    assert r["paging"]["console"]["shown"] == 5 and r["paging"]["console"]["total"] == 40
+    lines = r["console"]["lines"]
+    assert wrapped_once(lines) and MARK in lines and "kernel line 35" in lines
+
+
+def test_a_huge_label_note_is_cut_not_dropped():
+    data = machine()
+    data["labels"]["notes"] = ["x" * 9000]
+    r = fleet.details(data, ["machine", "labels"], HOSTNAMES)
+    assert size(r) <= fleet.LIMIT and "machine" in r
+    note = r["labels"]["notes"][0]
+    assert note.startswith("xxx") and note.endswith(MARK) and "labels" in r["cut"]
