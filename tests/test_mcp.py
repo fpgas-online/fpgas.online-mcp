@@ -44,9 +44,11 @@ class FakeInuse:
     def __init__(self):
         self.verdict = Verdict("idle", [], "2026-11-26T12:00:00Z")
         self.calls = []
+        self.kw = []
 
     async def __call__(self, board, ssh, sites, claim, **kw):
         self.calls.append((str(board.id), claim))
+        self.kw.append(kw)
         return self.verdict
 
 
@@ -54,12 +56,14 @@ class FakePower:
     def __init__(self):
         self.result = CycleResult(True, 42.0, "the board restarted and answers again after 42 s", None, ["toggled"])
         self.calls = []
+        self.claims = []
         self.should_stop = None
         self.gate: asyncio.Event | None = None  # set: wait for it (the in-use check is running)
         self.started = asyncio.Event()
 
     async def __call__(self, board, claim, sites, ssh, **kw):
         self.calls.append((str(board.id), claim.claim_id))
+        self.claims.append(claim)
         self.should_stop = kw["should_stop"]
         self.started.set()
         if self.gate is not None:

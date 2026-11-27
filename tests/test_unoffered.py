@@ -1,0 +1,208 @@
+"""allow_unoffered: reaching a welland Pi that is up but not offered, through the broker's ops.
+
+The broker runs in process (the test_mcp stack: fixture pages, fake ssh, stub in-use check and power
+cycle). welland:pi-sw1-p10 is `attention` and not offered in the registry fixture, and has no board
+page (HTTP 404), like a real Pi welland does not offer.
+"""
+
+import contextlib
+import json
+
+import httpx
+import pytest
+from test_broker import env  # noqa: F401  (fixture)
+from test_mcp import HERE, stack  # noqa: F401  (fixture)
+
+from fpgas_online_mcp import client, paths
+from fpgas_online_mcp.client import BrokerError
+from fpgas_online_mcp.inuse import Verdict
+
+UNOFFERED = "welland:pi-sw1-p10"  # attention, offered false, no board page
+OFFERED = "welland:pi-sw1-p2"  # operational, offered, has a board page
+MISSING = "welland:pi-sw2-p18"
+SETUP = "welland:pi-sw1-p12"  # attention; set on the setup port by `setup_port`
+NOTE = (
+    "not offered by the site (condition: attention): it may be under maintenance; use it only for what the user asked"
+)
+HINT = (
+    "welland does not offer welland:pi-sw1-p10 (condition attention); if the user wants it anyway and it is up, "
+    "pass allow_unoffered"
+)
+
+
+@contextlib.asynccontextmanager
+async def broker(holder="me:1@host"):
+    c = await client.connect(holder, spawn=False)
+    try:
+        yield c
+    finally:
+        await c.close()
+
+
+async def refused(c, op, **args) -> BrokerError:
+    with pytest.raises(BrokerError) as exc:
+        await c.call(op, **args)
+    return exc.value
+
+
+def setup_port(stack, name="pi-sw1-p12"):  # noqa: F811
+    registry = json.loads((HERE / "fixtures" / "welland_registry.json").read_text())
+    for m in registry["machines"]:
+        if m["hostname"] == name:
+            m["setup_port"] = True
+    stack.site.override[("welland.fpgas.online", "/fleet/registry.json")] = httpx.Response(200, json=registry)
+
+
+def password_reads(stack):  # noqa: F811
+    return stack.site.count("/fpgas/pi-sw1-p2.html")  # the page site_password reads
+
+
+# --- default: unchanged refusal ------------------------------------------------------------------
+
+
+async def test_without_the_option_an_unoffered_pi_is_refused_and_told_about_the_option(stack):  # noqa: F811
+    stack.inuse.verdict = Verdict("unknown", [HINT], "x", not_offered=True)
+    async with broker() as c:
+        e = await refused(c, "claim_board", board=UNOFFERED, purpose="look")
+        assert e.code == "not_offered" and HINT in e.message and "not claimed" in e.message
+        # an override would give a claim that still cannot reach the Pi: refused the same way
+        e = await refused(c, "claim_board", board=UNOFFERED, purpose="look", override_reason="Tim said so")
+        assert e.code == "not_offered"
+    assert stack.state.claims.for_board(UNOFFERED) is None
+    assert stack.inuse.kw[-1]["allow_unoffered"] is False
+
+
+async def test_a_claim_without_the_option_cannot_reach_the_pi(stack):  # noqa: F811
+    async with broker() as c:
+        await c.call("claim_board", board=UNOFFERED, purpose="look")  # the stub check says idle
+        for op, args in (("connect", {}), ("run", {"command": "true"})):
+            # the option is the claim's: passing it here changes nothing
+            e = await refused(c, op, board=UNOFFERED, allow_unoffered=True, **args)
+            assert e.code == "not_offered" and HINT in e.message
+            assert "claim the board again with allow_unoffered" in e.message
+    assert password_reads(stack) == 0
+    assert "Host fpgas-welland-pi-sw1-p10" not in _config()
+
+
+def _config() -> str:
+    path = paths.config_dir() / "ssh_config"
+    return path.read_text() if path.exists() else ""
+
+
+async def test_board_status_without_the_option_says_how_to_reach_the_pi(stack):  # noqa: F811
+    stack.inuse.verdict = Verdict("unknown", [HINT], "x", not_offered=True)
+    async with broker() as c:
+        status = await c.call("board_status", board=UNOFFERED)
+    assert status["not_offered"] == HINT and "offered_note" not in status
+    assert status["in_use"]["verdict"] == "unknown" and stack.inuse.kw[-1]["allow_unoffered"] is False
+
+
+# --- with the option -----------------------------------------------------------------------------
+
+
+async def test_the_option_reaches_an_attention_pi_and_is_kept_in_the_claim(stack):  # noqa: F811
+    async with broker() as c:
+        claim = await c.call("claim_board", board=UNOFFERED, purpose="look", allow_unoffered=True)
+        assert stack.inuse.kw[-1]["allow_unoffered"] is True  # the check could run its script
+        assert claim["allow_unoffered"] is True and claim["offered_note"] == NOTE
+        stored = stack.state.claims.for_board(UNOFFERED)
+        assert stored.allow_unoffered is True
+        info = await c.call("connect", board=UNOFFERED)  # nobody passes the option here
+        assert info["alias"] == "fpgas-welland-pi-sw1-p10" and info["offered_note"] == NOTE
+        r = await c.call("run", board=UNOFFERED, command="echo up")
+        assert r["exit_status"] == 0 and "up" in r["output"]
+        await c.call("power_cycle", board=UNOFFERED)
+    assert stack.power.claims[-1].allow_unoffered is True
+    assert password_reads(stack) == 1  # the site-wide password, read once
+    config = _config()
+    assert "Host fpgas-welland-pi-sw1-p10" in config and "Port 11022" in config and "REDACTED" not in config
+
+
+async def test_every_view_of_the_claim_shows_the_option(stack):  # noqa: F811
+    async with broker() as c:
+        await c.call("claim_board", board=UNOFFERED, purpose="look", allow_unoffered=True)
+        await c.call("claim_board", board=OFFERED, purpose="blink")
+    async with broker("other:2@host") as other:
+        listed = await other.call("list_boards", site="welland")
+        assert listed["claims"][UNOFFERED]["allow_unoffered"] is True
+        assert "allow_unoffered" not in listed["claims"][OFFERED]
+        claims = {c["board"]: c for c in (await other.call("claims"))["claims"]}
+        assert claims[UNOFFERED]["allow_unoffered"] is True and "allow_unoffered" not in claims[OFFERED]
+        status = await other.call("board_status", board=UNOFFERED, check_use=False)
+        assert status["board"]["claim"]["allow_unoffered"] is True
+
+
+async def test_board_status_with_the_option(stack):  # noqa: F811
+    async with broker() as c:
+        status = await c.call("board_status", board=UNOFFERED, allow_unoffered=True)
+        assert status["allow_unoffered"] is True and status["offered_note"] == NOTE
+        assert stack.inuse.kw[-1]["allow_unoffered"] is True
+        offered = await c.call("board_status", board=OFFERED, allow_unoffered=True)
+        assert offered["allow_unoffered"] is True and "offered_note" not in offered
+
+
+async def test_the_option_on_an_offered_pi_is_harmless(stack):  # noqa: F811
+    async with broker() as c:
+        claim = await c.call("claim_board", board=OFFERED, purpose="blink", allow_unoffered=True)
+        assert claim["allow_unoffered"] is True and "offered_note" not in claim
+        info = await c.call("connect", board=OFFERED)
+        assert "offered_note" not in info
+    assert password_reads(stack) == 1  # its own page, not the site-wide fallback
+    assert stack.site.count("/fpgas/") == 0
+
+
+# --- the option does not cover ... ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("board", "expected"),
+    [
+        (
+            MISSING,
+            "welland:pi-sw2-p18 is missing (not checking in): allow_unoffered reaches only a Pi that is up "
+            "(condition operational or attention)",
+        ),
+        (SETUP, "welland:pi-sw1-p12 is on the setup port (it is being set up): allow_unoffered does not cover it"),
+        ("ps1:pi3", "allow_unoffered covers only welland Pis: ps1 lists only the hosts it offers"),
+        ("tinytapeout:tt06", "allow_unoffered covers only welland Pis: a Tiny Tapeout board already reaches its Pi"),
+    ],
+)
+async def test_the_option_is_refused_where_it_does_not_apply(stack, board, expected):  # noqa: F811
+    setup_port(stack)
+    async with broker() as c:
+        for op in ("claim_board", "board_status"):
+            e = await refused(c, op, board=board, purpose="look", allow_unoffered=True)
+            assert e.code == "unoffered_not_covered" and expected in e.message
+    assert stack.inuse.calls == [] and stack.state.claims.all() == []
+
+
+async def test_a_missing_or_setup_port_pi_is_told_the_option_will_not_help(stack):  # noqa: F811
+    setup_port(stack)
+    async with broker() as c:
+        for board, why in ((MISSING, "not checking in"), (SETUP, "setup port")):
+            await c.call("claim_board", board=board, purpose="x", override_reason="test")
+            e = await refused(c, "connect", board=board)
+            assert e.code == "not_offered" and "allow_unoffered will not help" in e.message and why in e.message
+            assert "claim the board again" not in e.message
+
+
+# --- renewals and arguments ----------------------------------------------------------------------
+
+
+async def test_a_renewal_keeps_the_option_and_never_adds_it(stack):  # noqa: F811
+    async with broker() as c:
+        flagged = await c.call("claim_board", board=UNOFFERED, purpose="look", allow_unoffered=True)
+        renewed = await c.call("claim_board", board=UNOFFERED, purpose="more", claim_id=flagged["claim_id"])
+        assert renewed["renewed"] is True and renewed["allow_unoffered"] is True
+        plain = await c.call("claim_board", board=OFFERED, purpose="blink")
+        e = await refused(c, "claim_board", board=OFFERED, purpose="blink", claim_id=plain["claim_id"],
+                          allow_unoffered=True)  # fmt: skip
+        assert e.code == "bad_request" and "release" in e.message
+    assert stack.state.claims.for_board(OFFERED).allow_unoffered is False
+
+
+@pytest.mark.parametrize("value", ["yes", 1])
+async def test_the_option_must_be_a_boolean(stack, value):  # noqa: F811
+    async with broker() as c:
+        e = await refused(c, "claim_board", board=UNOFFERED, purpose="x", allow_unoffered=value)
+        assert e.code == "bad_request" and "allow_unoffered" in e.message
