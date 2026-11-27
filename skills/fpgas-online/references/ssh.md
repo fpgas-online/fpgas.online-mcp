@@ -13,34 +13,21 @@ Pick a host from the offered list first (boards.md) and check it is not in use (
 
 ## Long-running jobs
 
-A job that must outlive your `ssh host cmd` (a capture, a long flash, a soak test) goes in a
-**new window of the shared `default` tmux session**. Never put it in a tmux session of its own,
-under `nohup`/`setsid`, or after `&`. Why: an interactive login (ps1's `~/.zprofile`, the web
-terminal) reaps every tmux session nobody is attached to, while windows of `default` are kept.
-Everyone sees the window in the web terminal, and the in-use check lists it ("tmux windows
-running a program"). A job outside tmux is invisible to both.
+A job that must outlive one `ssh host cmd` goes in a **new named window of the shared tmux
+session `default`**, never in a session of its own (an interactive login reaps those), under
+`nohup` or after `&` (invisible to people and to the in-use check). The second command makes
+`default` if it does not exist:
 
 ```sh
-A=fo-welland-pi-sw1-p2
-ssh "$A" 'tmux has-session -t default || tmux new-session -d -s default -n h "tail -f ~/.tmux-help"
-tmux new-window -d -t default: -n vga-capture "sh ~/capture.sh; echo exit \$?; read x"'
-ssh "$A" 'tmux list-windows -t default -F "#{window_name}"'     # is it still there?
-ssh "$A" 'tmux capture-pane -p -t default:vga-capture | tail -n 20'   # its last output
-ssh "$A" 'tmux kill-window -t default:vga-capture'               # when done: your window only
+J='"sh ~/capture.sh; echo exit \$?; read x"'   # the window keeps its output and exit status
+ssh fo-welland-pi-sw1-p2 "tmux new-window -d -t default: -n vga-capture $J ||
+  tmux new-session -d -s default -n vga-capture $J"
+ssh fo-welland-pi-sw1-p2 'tmux capture-pane -p -t default:vga-capture | tail -n 20'
+ssh fo-welland-pi-sw1-p2 'tmux kill-window -t default:vga-capture'   # your own window only
 ```
 
-- Name the window after the job (`-n`), so people and the in-use signals can tell what it is.
-- `; echo exit $?; read x` keeps the window, with its output and exit status, after the job ends,
-  as an idle shell that no longer counts as running.
-- The first line creates `default` the way a login does, when nobody has logged in since boot.
-- **Keep your claim, renewing it, until the job ends.** The in-use check counts a tmux program
-  as in use only while its session has had a key press within the last-activity window (5
-  minutes by default), so an unattended job reads idle after that. Your claim is what keeps
-  others off the board.
-- Close only windows you started. Never `kill-session`, `kill-server` or `exit` a shared window
-  (below).
-
-(Checked on a local tmux 3.x with the same session layout; not run on a board.)
+**Keep your claim, renewing it, until the job ends**: with no key presses the in-use check
+reads the board idle after the last-activity window (5 minutes by default).
 
 ## Port rule
 
