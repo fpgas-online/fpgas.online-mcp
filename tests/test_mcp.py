@@ -198,6 +198,9 @@ async def test_tool_list_and_annotations(stack):
     # durations are stated where they are long
     for name in ("board_status", "claim_board", "power_cycle"):
         assert "minute" in tools[name].description
+    # a hung board reads unknown: the description says how to cycle it and that in use never is
+    cycle = tools["power_cycle"].description
+    assert "override_reason" in cycle and "never one that reads in use" in cycle
     schema = tools["claim_board"].input_schema
     assert set(schema["required"]) == {"board", "purpose"}
     assert schema["properties"]["minutes"]["default"] == 30 and schema["properties"]["minutes"]["maximum"] == 240
@@ -326,6 +329,7 @@ async def test_claim_refused_when_in_use_then_override(stack):
         assert stack.state.claims.for_board(WELLAND) is None
         claim = ok(await call(c, "claim_board", board=WELLAND, purpose="blink", override_reason="Tim said so"))
         assert claim["override_reason"] == "Tim said so" and claim["in_use"]["verdict"] == "in use"
+        assert stack.state.claims.get(claim["claim_id"]).verdict_at_claim == "in use"
     async with stack.session("other:2@host") as other:
         listed = ok(await call(other, "list_boards", site="welland"))
         mine = listed["claims"][WELLAND]

@@ -540,6 +540,7 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
             tt_state_at_claim=tt_state,
             host=str(host) if host else None,
             allow_unoffered=allow,
+            verdict_at_claim=verdict.verdict if verdict is not None else None,
         )
     except ClaimConflict as e:
         raise _conflict(e) from e
