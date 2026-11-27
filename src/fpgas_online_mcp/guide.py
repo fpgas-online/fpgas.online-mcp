@@ -15,7 +15,8 @@ SOURCE_URL = "https://github.com/fpgas-online/fpgas.online-mcp/blob/main/skills/
 DOCS_URL = "https://docs.fpgas.online/en/latest/user/index.html"
 
 TOOLS_NOTE = (
-    "With the fpgas-online MCP tools: list_boards and board_status to look, claim_board before anything "
+    "With the fpgas-online MCP tools: list_boards and board_status to look (fleet_details and switch_ports "
+    "for why a welland board is not offered or is down), claim_board before anything "
     "that disturbs a board, then connect / run / power_cycle with that claim, and release_board when done. "
     "The shell commands below are for reference; the tools do the same with shared connections and claims."
 )

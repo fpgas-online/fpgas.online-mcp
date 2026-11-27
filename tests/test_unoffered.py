@@ -270,7 +270,7 @@ async def test_board_status_shows_the_boot_check_boards_fleet_page_and_switch_po
         }
     ]
     assert board["fleet_page"] == "https://welland.fpgas.online/fleet/000000004fe3e7e4/"
-    assert board["switch_port"] == {"link_up": True, "poe_state": "delivering", "watts": 8.7}
+    assert board["switch_port"] == {"link_up": True, "poe_state": "delivering", "watts": 8.6}
     assert all(r.method == "GET" for r in stack.site.requests)  # nothing but reads, never a switch action
     assert stack.site.count("/management/switches.json") == 1
 
@@ -318,7 +318,7 @@ async def test_board_status_drops_the_boards_when_even_that_is_too_long(stack): 
     async with stack.session() as c:
         status = ok(await call(c, "board_status", board=UNOFFERED, allow_unoffered=True))
     assert "boards" not in status["board"] and "fleet_page" in status["board"]["cut"]
-    assert status["in_use"]["verdict"] == "in use" and status["board"]["switch_port"]["watts"] == 8.7
+    assert status["in_use"]["verdict"] == "in use" and status["board"]["switch_port"]["watts"] == 8.6
 
 
 async def test_board_status_that_fits_keeps_every_test(stack):  # noqa: F811
@@ -403,7 +403,7 @@ async def test_cli_status_and_claim_with_the_option(stack, capsys):  # noqa: F81
 
     code, out, err = await cli(capsys, "status", UNOFFERED, "--allow-unoffered")
     assert code == 0 and NOTE in out and "boot check: fail" in out and "fleet page: https://welland" in out
-    assert "switch port: link up, PoE delivering, 8.7 W" in out
+    assert "switch port: link up, PoE delivering, 8.6 W" in out
     code, out, err = await cli(capsys, "claim", UNOFFERED, "--purpose", "look", "--allow-unoffered")
     assert code == 0 and NOTE in out and "allow_unoffered" in out
     code, out, err = await cli(capsys, "claims")

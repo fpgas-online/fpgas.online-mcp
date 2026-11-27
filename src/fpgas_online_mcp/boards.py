@@ -9,7 +9,7 @@ from .cache import Entry
 from .sites import SITES, BoardPage, SiteClient, SiteError
 
 NOTES = {
-    "welland": "every registered machine, including missing ones",
+    "welland": "every registered machine, including missing ones; fleet_details says why one is not offered",
     "ps1": "only hosts offered now; absence says nothing",
     "tinytapeout": "catalogue; condition from status.json",
 }

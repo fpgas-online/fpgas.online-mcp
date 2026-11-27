@@ -81,11 +81,15 @@ def wrap_untrusted(text: str) -> str:
     return f'<board-output untrusted="true">{text}</board-output>'
 
 
-def _clean(data: bytes) -> str:
-    text = data.decode("utf-8", errors="replace")
+def clean_text(text: str) -> str:
+    """text without terminal escape sequences and control characters (tab and newline stay)."""
     for pattern in (_OSC, _CSI, _ESC, _CONTROL):
         text = pattern.sub("", text)
     return text
+
+
+def _clean(data: bytes) -> str:
+    return clean_text(data.decode("utf-8", errors="replace"))
 
 
 def clean_output(head: bytes, tail: bytes, total: int) -> tuple[str, bool]:

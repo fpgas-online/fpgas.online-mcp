@@ -68,6 +68,8 @@ verified), so expect only the HTTPS parts to work there.
 | `connect` | Open the shared ssh connection (a Tiny Tapeout board's: to the welland Pi it is plugged into); returns the ssh/scp command lines |
 | `run` | Run one non-interactive command on the host (output at most 8 KB, wrapped as untrusted) |
 | `power_cycle` | Cycle the port and wait for a real reboot (about 8 minutes at worst) |
+| `fleet_details` | welland's page of one Pi (a Tiny Tapeout board: its Pi): machine, boards, network and switch port by default; boot checks, labels, registrations, events and console on request; paged, at most 8 KB, everything the Pi reports about itself wrapped as untrusted. Read-only; not for ps1 |
+| `switch_ports` | welland's switch ports (link, PoE state and watts, VLAN, LLDP names wrapped as untrusted, errors); filter by switch, port, board or problems. Read-only: it never switches a port; not for ps1 |
 
 `connect`, `run` and `power_cycle` need your claim. Unknown in-use state counts
 as in use.
@@ -101,6 +103,8 @@ fpgas-online status BOARD [--allow-unoffered]
 fpgas-online claims
 fpgas-online claim BOARD --purpose TEXT [--minutes N] [--override-reason TEXT] [--allow-unoffered]
 fpgas-online release CLAIM_ID
+fpgas-online fleet BOARD [--section SECTION ...] [--limit N] [--offset N]
+fpgas-online switches [--switch N] [--port N] [--board BOARD] [--problems] [--limit N] [--offset N]
 fpgas-online broker status|stop
 ```
 

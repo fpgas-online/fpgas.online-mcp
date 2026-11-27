@@ -44,6 +44,16 @@ All commands send `-A fpgas-online-skill`. ssh setup (askpass, `fo-*` aliases): 
    `B` is a UUID. (If `ssh -O exit` prints `Control socket connect(...): No such file or
    directory` there was no master; that is fine.)
 3. Note the time: `T0=$(date +%s)`.
+4. welland and tinytapeout: note the port's PoE state (with the MCP tools, `switch_ports`
+   with the board; a Tiny Tapeout board gives its Pi's port). `delivering` with some watts
+   is a powered Pi; `searching` means nothing draws power, so a cycle will not help (the
+   Pi is unplugged or has no power): tell the user instead. Without the tools (`S` and `P`
+   from the host name `pi-sw<S>-p<P>`):
+   ```sh
+   curl -sS -A fpgas-online-skill https://welland.fpgas.online/management/switches.json |
+     jq -r --argjson s 1 --argjson p 2 '.switches[] | select(.index == $s) | .ports[] | select(.port == $p) | [.poe_state, .watts, .badge_words] | @tsv'
+   ```
+   Prints `delivering	4.2	link up at 1G` for a powered Pi with its link up.
 
 ## The request
 
@@ -138,7 +148,10 @@ A `429` response has a `Retry-After: <seconds>` header; the body says why.
 ## Waiting for the board to come back
 
 Poll once every 10 s and give up after 5 minutes (30 tries). Do not cycle again if it does
-not return. `T0` is the epoch time you noted before the request.
+not return. `T0` is the epoch time you noted before the request. On welland and tinytapeout,
+check the port's PoE state again (step 4 above, or `switch_ports`): it should be `delivering`
+again; a port still `searching` after the cycle has a Pi that does not draw power, which
+the user must look at.
 
 A restarted host is "back" only when its boot id differs from `$B` (recorded above) **and**
 ssh answers. ssh alone is not proof: it can still reach the old boot for a moment before

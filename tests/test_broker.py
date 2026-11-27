@@ -12,12 +12,13 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from tmpdir import TEST_TMP
 
 from fpgas_online_mcp import __version__, client, paths
 from fpgas_online_mcp.broker import SOCK_NAME, Broker, Conn, serve
 from fpgas_online_mcp.client import BrokerError
 
-REPO_TMP = Path(__file__).resolve().parent.parent / "tmp"
+REPO_TMP = TEST_TMP
 
 
 def _raw(sock_path: Path, *lines: dict) -> list[dict]:
