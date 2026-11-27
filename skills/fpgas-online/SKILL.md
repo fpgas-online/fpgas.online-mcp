@@ -22,7 +22,7 @@ using boards, not running the infrastructure. Everything below needs only `curl`
 | ssh | yes, user `pi`, port `<switch><2-digit port>22` (`pi-sw1-p2` is 10222), IPv4 and IPv6 | yes, user `pi`, port `(100+N)*100+22` (`pi3` is 10322) | on the board's welland Pi, which the board page names (tinytapeout.md) |
 | Power-cycle | `POST /snmp/toggle`, then a 60 s hold (429 inside it); the host reboots | same endpoint, no hold; the switch cycles the named port, but many ps1 hosts have no PoE HAT and do not lose power: check the boot id, and if it is unchanged tell the user to reset the host by hand | `POST /snmp/toggle` through the site (port from the board page) |
 | In use | read on the host over ssh (logins, tmux clients, idle times) | same, over ssh | `status.json` (`clients`, `idle_display`) and the ssh check on its Pi |
-| Other | `cameras` in the registry | board page | designs, bitstream upload and serial bridge (state-changing parts not yet exercised live) |
+| Other | `cameras` in the registry; each Pi's page `/fleet/<serial>/` and the switch ports `/management/switches/` (boards.md) | board page | designs, bitstream upload and serial bridge (state-changing parts not yet exercised live) |
 
 Each welland and ps1 host has a page `/fpgas/<hostname>.html`; the ssh password is shared
 per site and published there (see ssh.md).
