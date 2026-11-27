@@ -16,12 +16,14 @@ Format (all times ISO 8601 UTC, `Z` suffix):
       "expires": "2026-11-26T12:30:00Z",    # claims last 1..240 minutes (default 30)
       "override_reason": null,              # why an in-use board was claimed anyway
       "tt_state_at_claim": null,            # Tiny Tapeout state seen at claim time
-      "host": null                          # Tiny Tapeout: the Pi it is plugged into ("welland:pi-sw2-p7")
+      "host": null,                         # Tiny Tapeout: the Pi it is plugged into ("welland:pi-sw2-p7")
+      "allow_unoffered": false              # reach this welland Pi although the site does not offer it
     }
 
 One claim per Pi: a claim's hardware key is its `host`, else its board. A new claim is refused
 while another board with the same key has a live claim, so a Tiny Tapeout board and the welland Pi
-it is plugged into exclude each other. Files written before `host` existed read as host None.
+it is plugged into exclude each other. Files written before `host` existed read as host None, and
+before `allow_unoffered` as false (only a JSON `true` counts). A renewal keeps both as stored.
 
 Mutations hold an flock on `claims/.lock` (cross-process) and an asyncio lock.
 Naive times in a hand-edited file are read as UTC.
@@ -63,6 +65,7 @@ class Claim:
     override_reason: str | None = None
     tt_state_at_claim: str | None = None
     host: str | None = None
+    allow_unoffered: bool = False  # set at claim time (with its in-use check); connect/run/power_cycle use it
     holder_connected: bool = False  # in memory only, not persisted
 
     @property
@@ -157,6 +160,7 @@ class ClaimStore:
             "override_reason": claim.override_reason,
             "tt_state_at_claim": claim.tt_state_at_claim,
             "host": claim.host,
+            "allow_unoffered": claim.allow_unoffered,
         }
         fd, tmp = tempfile.mkstemp(dir=self._dir, prefix=".claim-", suffix=".tmp")
         try:
@@ -183,6 +187,7 @@ class ClaimStore:
                 override_reason=d.get("override_reason"),
                 tt_state_at_claim=d.get("tt_state_at_claim"),
                 host=d.get("host"),
+                allow_unoffered=d.get("allow_unoffered") is True,
             )
         except FileNotFoundError:
             return None
@@ -262,9 +267,11 @@ class ClaimStore:
         override_reason: str | None = None,
         tt_state_at_claim: str | None = None,
         host: str | None = None,
+        allow_unoffered: bool = False,
     ) -> Claim:
-        """Claim board, or renew claim_id. `host`: the Pi the board is plugged into (new claims only;
-        a renewal keeps the stored one)."""
+        """Claim board, or renew claim_id. `host`: the Pi the board is plugged into; `allow_unoffered`:
+        the board may be reached although its site does not offer it. Both for new claims only: a
+        renewal keeps the stored ones (it skips the in-use check, so it must not widen the claim)."""
         minutes = DEFAULT_MINUTES if minutes is None else minutes
         if not 1 <= minutes <= MAX_MINUTES:
             raise ValueError(f"minutes must be between 1 and {MAX_MINUTES}, got {minutes}")
@@ -303,6 +310,7 @@ class ClaimStore:
                     override_reason=override_reason,
                     tt_state_at_claim=tt_state_at_claim,
                     host=host,
+                    allow_unoffered=allow_unoffered,
                     holder_connected=holder in self._connected,
                 )
             self._write(claim)
