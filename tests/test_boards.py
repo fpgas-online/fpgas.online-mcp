@@ -287,3 +287,11 @@ async def test_not_offered_of_a_pi_with_a_tt_board_also_points_to_the_board(clie
     assert text.startswith("welland does not offer welland:pi-sw2-p11 (condition attention); if the user wants")
     assert text.endswith("; or claim its Tiny Tapeout board instead, which reaches this Pi without the option")
     assert "Tiny Tapeout" not in not_offered(boards["welland:pi-sw1-p10"])
+
+
+async def test_offered_note_says_when_the_registry_is_stale(client, site):  # noqa: F811
+    use_conditions_registry(site)
+    board = by_id(await inventory(client, "welland"))["welland:pi-sw2-p38"]
+    assert offered_note(replace(board, stale=True)) == (
+        offered_note(board) + " (the fleet registry could not be refreshed; this may be out of date)"
+    )

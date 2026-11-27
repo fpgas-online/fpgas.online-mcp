@@ -334,7 +334,10 @@ def not_offered(board: Board) -> str:
 
 def offered_note(board: Board) -> str:
     """The note on results for a Pi reached with allow_unoffered that the site does not offer."""
-    return OFFERED_NOTE.format(condition=board.condition)
+    note = OFFERED_NOTE.format(condition=board.condition)
+    if board.stale:
+        note += " (the fleet registry could not be refreshed; this may be out of date)"
+    return note
 
 
 async def welland_entry(sites: SiteClient, name: str) -> dict | None:
