@@ -22,6 +22,8 @@ USER_AGENT = f"fpgas-online-mcp/{__version__}"
 TIMEOUT_S = 15.0
 
 TTL_REGISTRY_S = 60
+TTL_SWITCHES_S = 60
+TTL_MACHINE_S = 30
 TTL_PS1_LIST_S = 60
 TTL_TT_HOME_S = 300
 TTL_TT_STATUS_S = 10
@@ -74,6 +76,31 @@ def _parse_registry(data: bytes) -> list[dict]:
     if len(good) < len(machines):
         log.warning("welland registry: skipped %d entries that are not objects", len(machines) - len(good))
     return good
+
+
+def _parse_switches(data: bytes) -> list[dict]:
+    """The switches of welland's management page (read only: the page's actions are never used)."""
+    switches = json.loads(data)["switches"]
+    if not isinstance(switches, list) or not all(isinstance(s, dict) for s in switches):
+        raise ValueError("switches is not a list of objects")
+    return switches
+
+
+def _parse_machine(data: bytes) -> dict:
+    """One Pi of welland's fleet, as `/fleet/<serial>/machine.json` publishes it."""
+    machine = json.loads(data)
+    if not isinstance(machine, dict) or not isinstance(machine.get("machine"), dict):
+        raise ValueError("no machine object")
+    return machine
+
+
+def _site_error_text(resp: httpx.Response) -> str:
+    """The `error` a site's JSON error answer gives (at most 200 characters), else ''."""
+    try:
+        error = resp.json().get("error")
+    except (ValueError, AttributeError):
+        return ""
+    return f": {error[:200]}" if isinstance(error, str) and error else ""
 
 
 def _unique(items) -> list[str]:
@@ -149,7 +176,9 @@ class SiteClient:
         except httpx.HTTPError as exc:
             raise SiteError(f"{site}: cannot reach the site ({type(exc).__name__})") from exc
         if resp.status_code != 200:
-            raise SiteError(f"{site}: HTTP {resp.status_code} for {path}", status=resp.status_code)
+            raise SiteError(
+                f"{site}: HTTP {resp.status_code} for {path}{_site_error_text(resp)}", status=resp.status_code
+            )
         return resp.content
 
     async def _get(
@@ -176,6 +205,17 @@ class SiteClient:
 
     async def welland_registry(self, live: bool = False) -> tuple[list[dict], Entry]:
         return await self._get("welland", "/fleet/registry.json", TTL_REGISTRY_S, _parse_registry, live)
+
+    async def welland_switches(self, live: bool = False) -> tuple[list[dict], Entry]:
+        """welland's switch ports (link, PoE state, watts, the machines on each), cached like the registry.
+        A plain GET of the public management page; nothing here ever switches a port."""
+        return await self._get("welland", "/management/switches.json", TTL_SWITCHES_S, _parse_switches, live)
+
+    async def welland_machine(self, serial: str, live: bool = False) -> tuple[dict, Entry]:
+        """Everything welland's page of one Pi shows, by its serial. A 404 (a site without this page yet,
+        or a serial that never registered) is a SiteError with status 404."""
+        self._check_name("welland", serial)
+        return await self._get("welland", f"/fleet/{serial}/machine.json", TTL_MACHINE_S, _parse_machine, live)
 
     async def ps1_hosts(self, live: bool = False) -> tuple[list[str], Entry]:
         return await self._get("ps1", "/fpgas/", TTL_PS1_LIST_S, _parse_ps1_hosts, live)

@@ -19,6 +19,9 @@ PAGES = {
     ("welland.fpgas.online", "/fleet/registry.json"): "welland_registry.json",
     ("welland.fpgas.online", "/fpgas/"): "welland_fpgas.html",
     ("welland.fpgas.online", "/fpgas/pi-sw1-p2.html"): "welland_board.html",
+    ("welland.fpgas.online", "/management/switches.json"): "welland_switches_full.json",
+    ("welland.fpgas.online", "/fleet/00000000cc479fd1/machine.json"): "welland_machine.json",
+    ("welland.fpgas.online", "/fleet/00000000665fad00/machine.json"): "welland_machine_tt.json",
     ("ps1.fpgas.online", "/fpgas/"): "ps1_fpgas.html",
     ("ps1.fpgas.online", "/fpgas/pi3.html"): "ps1_board.html",
     ("tinytapeout.fpgas.online", "/"): "tt_home.html",
@@ -438,3 +441,57 @@ async def test_site_password_needs_a_listed_pi(client, site):
         await client.site_password("welland")
     with pytest.raises(SiteError, match="no site-wide"):
         await client.site_password("tinytapeout")
+
+
+async def test_welland_switches_cached_for_a_minute(client, site, clock):
+    switches, entry = await client.welland_switches()
+    assert [s["index"] for s in switches] == [1, 2] and entry.stale is False
+    assert switches[0]["ports"][1]["poe_state"] == "delivering"
+    clock.advance(59)
+    await client.welland_switches()
+    assert site.count("/management/switches.json") == 1
+    clock.advance(2)
+    await client.welland_switches()
+    assert site.count("/management/switches.json") == 2
+
+
+async def test_welland_switches_503_names_the_sites_error(client, site):
+    site.override[("welland.fpgas.online", "/management/switches.json")] = httpx.Response(
+        503, json={"error": "the switches cannot be read now"}
+    )
+    with pytest.raises(SiteError, match="the switches cannot be read now") as exc:
+        await client.welland_switches()
+    assert exc.value.status == 503
+
+
+async def test_welland_switches_bad_layout_is_a_site_error(client, site):
+    site.override[("welland.fpgas.online", "/management/switches.json")] = httpx.Response(200, json={"x": 1})
+    with pytest.raises(SiteError, match="unexpected page layout"):
+        await client.welland_switches()
+
+
+async def test_welland_machine(client, site, clock):
+    machine, _ = await client.welland_machine("00000000cc479fd1")
+    assert machine["serial"] == "00000000cc479fd1" and machine["machine"]["hostname"] == "pi-sw1-p2"
+    clock.advance(29)
+    await client.welland_machine("00000000cc479fd1")
+    assert site.count("/fleet/00000000cc479fd1/machine.json") == 1
+    clock.advance(2)
+    await client.welland_machine("00000000cc479fd1")
+    assert site.count("/fleet/00000000cc479fd1/machine.json") == 2
+
+
+async def test_welland_machine_404_keeps_the_status(client, site):
+    path = "/fleet/00000000cc479fd1/machine.json"
+    site.override[("welland.fpgas.online", path)] = httpx.Response(
+        404, json={"error": "no host with this serial has registered"}
+    )
+    with pytest.raises(SiteError, match="no host with this serial") as exc:
+        await client.welland_machine("00000000cc479fd1")
+    assert exc.value.status == 404
+
+
+async def test_welland_machine_refuses_a_bad_serial(client, site):
+    with pytest.raises(SiteError, match="invalid"):
+        await client.welland_machine("../registry")
+    assert not site.requests
