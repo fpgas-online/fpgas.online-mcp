@@ -426,3 +426,12 @@ async def test_a_claim_whose_pi_is_no_longer_covered_is_refused(stack, op, board
     assert e.code == "unoffered_not_covered"
     assert e.message == f"{board} is now {now}: allow_unoffered no longer covers it; release the claim"
     assert stack.power.calls == [] and ssh_calls() == 0 and password_reads(stack) == 0
+
+
+async def test_board_status_without_the_in_use_check_still_says_not_offered(stack):  # noqa: F811
+    async with broker() as c:
+        status = await c.call("board_status", board=UNOFFERED, check_use=False)
+        assert status["not_offered"] == HINT and "in_use" not in status
+        assert "not_offered" not in await c.call("board_status", board=UNOFFERED, check_use=False,
+                                                 allow_unoffered=True)  # fmt: skip
+        assert "not_offered" not in await c.call("board_status", board=OFFERED, check_use=False)

@@ -418,6 +418,8 @@ async def op_board_status(state: State, args: dict, conn: Conn) -> dict:
         result["in_use"] = _verdict_view(verdict)
         if verdict.not_offered:
             result["not_offered"] = not_offered(board)
+    if needs_option(board, allow):  # from the inventory, so also without the in-use check
+        result["not_offered"] = not_offered(board)
     if refusal is not None:
         result["not_offered"] = f"allow_unoffered was ignored: {refusal}"
     return _fit_status(result)
