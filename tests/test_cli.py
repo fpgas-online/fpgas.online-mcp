@@ -202,3 +202,67 @@ def test_when_epoch():
     assert when_epoch("1700000000.5") == "2023-11-14 22:13 UTC"
     for bad in (None, "x", float("nan"), 1e30):
         assert when_epoch(bad) == str(bad)
+
+
+# --- fleet and switches ---------------------------------------------------------------------------
+
+
+async def test_fleet(stack, capsys):
+    code, out, err = await cli(capsys, "fleet", WELLAND)
+    assert code == 0 and err == ""
+    assert out.splitlines()[0].startswith(f"{WELLAND} (serial 00000000cc479fd1")
+    assert "page: https://welland.fpgas.online/fleet/00000000cc479fd1/" in out
+    assert "\nmachine:\n" in out and "  hostname: pi-sw1-p2" in out and "\nswitch_port:\n" in out
+    assert "events" not in out and "_action" not in out
+
+
+async def test_fleet_sections_paging_and_json(stack, capsys):
+    code, out, _ = await cli(capsys, "fleet", WELLAND, "--section", "events", "--section", "console", "--limit", "3")
+    assert code == 0
+    assert "events (3 of 30; next: --offset 3):" in out and f"  {UNTRUSTED}" in out
+    assert "console (3 of 40; next: --offset 3):" in out
+    code, out, _ = await cli(
+        capsys, "fleet", WELLAND, "--section", "events", "--limit", "2", "--offset", "28", "--json"
+    )
+    data = json.loads(out)
+    assert data["paging"]["events"] == {"total": 30, "offset": 28, "shown": 2}
+    code, out, err = await cli(capsys, "fleet", "ps1:pi3")
+    assert code == 1 and "ps1 publishes no fleet or switch pages" in err
+
+
+async def test_switches(stack, capsys):
+    code, out, err = await cli(capsys, "switches")
+    assert code == 0 and err == ""
+    assert "switch 1: sw-netgear-gsm7252ps-s2 (gsm7252ps), answering" in out
+    assert out.count("known issue: ") == 3
+    header = next(line for line in out.splitlines() if line.startswith("SWITCH"))
+    assert header.split() == [
+        "SWITCH",
+        "PORT",
+        "MACHINES",
+        "LINK",
+        "SPEED",
+        "POE",
+        "WATTS",
+        "VLAN",
+        "LLDP",
+        "ERRORS",
+        "NET",
+    ]
+    assert "_action" not in out and "can_power" not in out
+    code, out, _ = await cli(capsys, "switches", "--problems")
+    rows = [line.split()[:2] for line in out.splitlines() if re.match(r"\d+ +\d+ ", line)]
+    assert sorted(rows) == [["1", "11"], ["1", "14"], ["2", "2"], ["2", "42"]]
+    assert "2/42: not as it should be" in out  # why a port is not as it should be
+    code, out, _ = await cli(capsys, "switches", "--board", "tinytapeout:tt-ab2a48a7ee008dd9", "--json")
+    data = json.loads(out)
+    assert data["host"] == "welland:pi-sw2-p11" and [r[:2] for r in data["ports"]] == [[2, 11]]
+    code, out, _ = await cli(capsys, "switches", "--switch", "1", "--port", "2")
+    rows = [line.split()[:3] for line in out.splitlines() if re.match(r"\d+ +\d+ ", line)]
+    assert rows == [["1", "2", "pi-sw1-p2"]]
+
+
+async def test_fleet_against_an_older_broker(stack, capsys):
+    stack.broker._handlers.pop("switch_ports")
+    code, out, err = await cli(capsys, "switches")
+    assert code == 1 and "older" in err and "fpgas-online broker stop" in err

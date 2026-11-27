@@ -11,6 +11,7 @@ from typing import Any
 
 from . import __version__
 from .client import BrokerClient, BrokerError, connect, version_tuple
+from .fleet import SECTIONS
 from .protocol import PROTOCOL
 
 __all__ = ["main", "run"]
@@ -153,7 +154,102 @@ def fmt_release(r: dict) -> str:
     return f"released {r['released']}"
 
 
+_FLEET_HEAD = ("board", "host", "serial", "page", "as_of", "stale", "paging", "cut", "unavailable", "note")
+
+
+def _compact(v: Any) -> str:
+    return v if isinstance(v, str) else json.dumps(v, separators=(",", ":"), ensure_ascii=False)
+
+
+def fmt_fleet(r: dict) -> str:
+    on = f" on {r['host']}" if r.get("host") else ""
+    stale = " (stale)" if r.get("stale") else ""
+    lines = [f"{r.get('board')}{on} (serial {r.get('serial')}, as of {r.get('as_of') or '-'}){stale}"]
+    lines.append(f"page: {r.get('page')}")
+    paging = r.get("paging") or {}
+    for name, value in r.items():
+        if name in _FLEET_HEAD:
+            continue
+        title = name
+        if name in paging:
+            page = paging[name]
+            nxt = f"; next: --offset {page['next']}" if "next" in page else ""
+            title = f"{name} ({page['shown']} of {page['total']}{nxt})"
+        if isinstance(value, dict):
+            lines.append(f"{title}:")
+            lines += [f"  {k}: {_compact(v)}" for k, v in value.items()]
+        elif isinstance(value, list):
+            lines.append(f"{title}:")
+            lines += [f"  {_compact(v)}" for v in value]
+        elif isinstance(value, str) and "\n" in value:  # wrapped board text: one item per line
+            lines += [f"{title}:", f"  {value}"]
+        else:
+            lines.append(f"{title}: {_compact(value)}" if value is not None else f"{title}: -")
+    for name, note in (r.get("cut") or {}).items():
+        lines.append(f"cut {name}: {note}")
+    if r.get("unavailable"):
+        lines.append(f"not available: {', '.join(r['unavailable'])}")
+    if r.get("note"):
+        lines.append(f"note: {r['note']}")
+    return "\n".join(lines)
+
+
+def fmt_switches(r: dict) -> str:
+    lines = []
+    if r.get("board"):
+        on = f" on {r['host']}" if r.get("host") else ""
+        lines.append(f"the port of {r['board']}{on}")
+    for s in r.get("switches", []):
+        lines.append(
+            f"switch {s.get('index')}: {s.get('name')} ({s.get('model')}), {s.get('status')}, read {s.get('read_at')}; "
+            f"{s.get('empty_ports')} empty ports"
+        )
+        for issue in s.get("known_issues") or []:
+            lines.append(f"  known issue: {issue.get('text')} ({issue.get('issue')}, {issue.get('url')})")
+    rows, why = [], []
+    for row in r.get("ports", []):
+        p = dict(zip(r["columns"], row, strict=True))
+        rows.append(
+            [
+                str(p.get("switch")),
+                str(p.get("port")),
+                ",".join(p.get("machines") or []) or "-",
+                "up" if p.get("link_up") else "down",
+                p.get("speed") or "-",
+                p.get("poe_state") or "-",
+                p.get("watts") or "-",
+                p.get("vlan") or "-",
+                " ".join(x for x in (p.get("lldp_name"), p.get("lldp_port")) if x) or "-",
+                f"{p.get('rx_errors') or '-'}/{p.get('tx_errors') or '-'}",
+                "ok" if p.get("net_ok") else "NOT OK",
+            ]
+        )
+        if p.get("net_ok") is False:
+            why.append(f"{p.get('switch')}/{p.get('port')}: {p.get('net_title')}")
+    headers = ["SWITCH", "PORT", "MACHINES", "LINK", "SPEED", "POE", "WATTS", "VLAN", "LLDP", "ERRORS", "NET"]
+    lines.append(table(headers, rows))
+    lines += why
+    lines.append(f"{len(rows)} of {r.get('total')} ports, from offset {r.get('offset')}; as of {r.get('as_of')}")
+    if r.get("more"):
+        lines.append(r["more"])
+    return "\n".join(lines)
+
+
 # --- commands -------------------------------------------------------------------------------------
+
+
+async def _call(c: BrokerClient, op: str, **kw: Any) -> Any:
+    """c.call, saying what to do when the running broker is older than this CLI and lacks the op."""
+    try:
+        return await c.call(op, **kw)
+    except BrokerError as e:
+        if e.code != "unknown_op":
+            raise
+        raise BrokerError(
+            "version",
+            f"the running broker is older than this CLI and has no {op}; it is replaced once it is idle: run "
+            "`fpgas-online broker stop` when no claims are held, or wait for the other sessions to end",
+        ) from e
 
 
 async def _broker_op(args: argparse.Namespace) -> tuple[Any, Any]:
@@ -177,6 +273,19 @@ async def _broker_op(args: argparse.Namespace) -> tuple[Any, Any]:
                 return await c.call("claim_board", **kw), fmt_claim
             case "release":
                 return await c.call("release_board", claim_id=args.claim_id), fmt_release
+            case "fleet":
+                kw = {"board": args.board, "offset": args.offset}
+                if args.section:
+                    kw["sections"] = args.section
+                if args.limit is not None:
+                    kw["limit"] = args.limit
+                return await _call(c, "fleet_details", **kw), fmt_fleet
+            case "switches":
+                kw = {"problems": args.problems, "offset": args.offset}
+                for key in ("switch", "port", "board", "limit"):
+                    if getattr(args, key) is not None:
+                        kw[key] = getattr(args, key)
+                return await _call(c, "switch_ports", **kw), fmt_switches
     finally:
         await c.close()
     raise AssertionError(args.cmd)
@@ -241,6 +350,23 @@ def _parser() -> argparse.ArgumentParser:
     sp.add_argument("--purpose", required=True)
     sp.add_argument("--override-reason", help="claim although the in-use check says busy (ask the user first)")
     add("release", "release a claim").add_argument("claim_id")
+    sp = add("fleet", "welland's fleet page of a board's Pi: why it is not offered, its checks, events, console")
+    sp.add_argument("board", help="e.g. welland:pi-sw1-p2, or a Tiny Tapeout board (its Pi)")
+    sp.add_argument(
+        "--section",
+        action="append",
+        choices=[*SECTIONS, "all"],
+        help="a section to show (repeat for more; default machine, boards, network, switch_port)",
+    )
+    sp.add_argument("--limit", type=int, help="items per list section (the broker defaults to 20)")
+    sp.add_argument("--offset", type=int, default=0, help="skip this many items of each list section (newest first)")
+    sp = add("switches", "welland's switch ports: link, PoE, VLAN, LLDP, errors (read-only)")
+    sp.add_argument("--switch", help="only this switch (number or name)")
+    sp.add_argument("--port", type=int, help="only this port number")
+    sp.add_argument("--board", help="only the port of this board (a Tiny Tapeout board: its Pi's port)")
+    sp.add_argument("--problems", action="store_true", help="only ports not as they should be, or with errors")
+    sp.add_argument("--limit", type=int, help="at most this many ports")
+    sp.add_argument("--offset", type=int, default=0, help="skip this many ports")
     b = add("broker", "inspect or stop the broker")
     b.add_argument("action", choices=["status", "stop"])
     return p
