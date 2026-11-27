@@ -1,6 +1,7 @@
 """Board identity and inventory, served from the Task 3 fixtures."""
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import httpx
@@ -8,13 +9,19 @@ import pytest
 from test_sites import FIX, client, clock, site  # noqa: F401  (fixtures)
 
 from fpgas_online_mcp.boards import (
+    OFFERED_NOTE,
     TT_HOST_SITE,
     BoardId,
     inventory,
+    not_offered,
+    offered_note,
+    port_facts,
     ssh_port,
     switch_port,
     tt_host,
     tt_switch_port,
+    unoffered_refusal,
+    welland_entry,
 )
 from fpgas_online_mcp.sites import BoardPage, SiteError
 
@@ -157,3 +164,134 @@ def test_tt_switch_port_is_the_one_parser():
     assert tt_switch_port(BoardPage(tt_port="35", tt_switch="2")) == (2, 35)
     for port, switch in (("07", "2"), ("7", "02"), ("", ""), ("7", None), ("0", "2"), ("x", "2")):
         assert tt_switch_port(BoardPage(tt_port=port, tt_switch=switch)) is None
+
+
+# --- Pis welland does not offer --------------------------------------------------------------------
+
+
+def use_conditions_registry(site, setup_port=None):  # noqa: F811
+    reg = json.loads((FIX / "welland_registry_conditions.json").read_text())
+    if setup_port:
+        next(m for m in reg["machines"] if m["hostname"] == setup_port)["setup_port"] = True
+    site.override[("welland.fpgas.online", "/fleet/registry.json")] = httpx.Response(200, json=reg)
+
+
+async def test_setup_port_read_from_the_registry(client, site):  # noqa: F811
+    use_conditions_registry(site, setup_port="pi-sw2-p38")
+    boards = by_id(await inventory(client, "welland"))
+    assert boards["welland:pi-sw2-p38"].setup_port is True
+    assert boards["welland:pi-sw1-p2"].setup_port is False
+
+
+async def test_old_registry_without_setup_port_reads_false(client):  # noqa: F811
+    assert all(b.setup_port is False for b in (await inventory(client, "welland")).boards)
+
+
+async def test_unoffered_refusal_covers_only_welland_pis_that_are_up(client, site):  # noqa: F811
+    use_conditions_registry(site)
+    boards = by_id(await inventory(client))
+    assert unoffered_refusal(boards["welland:pi-sw2-p38"]) is None  # attention: up, not offered
+    assert unoffered_refusal(boards["welland:pi-sw1-p2"]) is None  # operational
+    missing = unoffered_refusal(boards["welland:pi-sw2-p18"])
+    assert missing == (
+        "welland:pi-sw2-p18 is missing (not checking in): allow_unoffered reaches only a Pi that is up "
+        "(condition operational or attention)"
+    )
+    assert "ps1 lists only the hosts it offers" in unoffered_refusal(boards["ps1:pi3"])
+    assert "already reaches its Pi" in unoffered_refusal(boards["tinytapeout:tt06"])
+    assert unoffered_refusal(replace(boards["welland:pi-sw2-p38"], setup_port=True)) == (
+        "welland:pi-sw2-p38 is on the setup port (it is being set up): allow_unoffered does not cover it"
+    )
+
+
+async def test_not_offered_says_whether_the_option_helps(client, site):  # noqa: F811
+    use_conditions_registry(site)
+    boards = by_id(await inventory(client, "welland"))
+    assert not_offered(boards["welland:pi-sw2-p38"]) == (
+        "welland does not offer welland:pi-sw2-p38 (condition attention); if the user wants it anyway and it is "
+        "up, pass allow_unoffered"
+    )
+    text = not_offered(boards["welland:pi-sw2-p18"])
+    assert text.startswith("welland does not offer welland:pi-sw2-p18 (condition missing); ")
+    assert "allow_unoffered will not help" in text and "not checking in" in text
+    text = not_offered(replace(boards["welland:pi-sw2-p38"], setup_port=True))
+    assert "allow_unoffered will not help" in text and "setup port" in text
+
+
+async def test_offered_note_text(client, site):  # noqa: F811
+    use_conditions_registry(site)
+    board = by_id(await inventory(client, "welland"))["welland:pi-sw2-p38"]
+    assert offered_note(board) == (
+        "not offered by the site (condition: attention): it may be under maintenance; use it only for what "
+        "the user asked"
+    )
+    assert OFFERED_NOTE.format(condition="attention") == offered_note(board)
+
+
+async def test_welland_entry_is_the_chosen_registry_entry(client, site):  # noqa: F811
+    entry = await welland_entry(client, "pi-sw1-p10")
+    assert entry["serial"] == "000000004fe3e7e4" and entry["check"]["result"] == "fail"
+    assert await welland_entry(client, "pi-sw9-p99") is None
+
+
+P2 = "00000000cc479fd1"  # the serial of pi-sw1-p2 in the registry and on its switch port
+
+
+async def test_port_facts_from_the_switch_page(client, site):  # noqa: F811
+    assert await port_facts(client, "pi-sw1-p2", P2) == {"link_up": True, "poe_state": "delivering", "watts": 4.2}
+    assert await port_facts(client, "pi-sw2-p38", "80ba29ff33528664") == {
+        "link_up": True,
+        "poe_state": "delivering",
+        "watts": 4.2,
+    }
+    assert await port_facts(client, "pi-sw3-p1", None) is None  # no such switch
+    assert await port_facts(client, "pi-sw1-p40", None) is None  # no such port on the page
+    assert await port_facts(client, "raspberry", None) is None
+    assert all(r.method == "GET" for r in site.requests)
+
+
+async def test_port_facts_only_for_the_pi_on_that_port(client, site):  # noqa: F811
+    assert await port_facts(client, "pi-sw1-p1", None) is None  # nobody on the port
+    assert await port_facts(client, "pi-sw1-p2", "00000000deadbeef") is None  # another Pi's serial is there
+    assert await port_facts(client, "pi-sw1-p2", None) is None  # the row has a serial, we have none
+
+
+def switches(*ports):
+    return httpx.Response(200, json={"switches": [{"index": 1, "ports": list(ports)}]})
+
+
+async def test_port_facts_match_by_hostname_when_the_row_has_no_serial(client, site):  # noqa: F811
+    row = {"port": 2, "link_up": True, "poe_state": "delivering", "watts": "3.5"}
+    site.override[("welland.fpgas.online", "/management/switches.json")] = switches(
+        {**row, "machines": [{"hostname": "pi-sw1-p2"}]}
+    )
+    assert (await port_facts(client, "pi-sw1-p2", P2))["watts"] == 3.5
+
+
+async def test_port_facts_unreadable_is_none(client, site):  # noqa: F811
+    site.override[("welland.fpgas.online", "/management/switches.json")] = httpx.Response(500)
+    assert await port_facts(client, "pi-sw1-p2", P2) is None
+
+
+@pytest.mark.parametrize("watts", [True, False, "x", None, [], "nan-ish"])
+async def test_port_facts_odd_values_are_none(client, site, watts):  # noqa: F811
+    site.override[("welland.fpgas.online", "/management/switches.json")] = switches(
+        {"port": 2, "link_up": "yes", "poe_state": 3, "watts": watts, "machines": [{"serial": P2}]}
+    )
+    assert await port_facts(client, "pi-sw1-p2", P2) == {"link_up": None, "poe_state": None, "watts": None}
+
+
+async def test_not_offered_of_a_pi_with_a_tt_board_also_points_to_the_board(client):  # noqa: F811
+    boards = by_id(await inventory(client, "welland"))
+    text = not_offered(boards["welland:pi-sw2-p11"])  # attention, carries a TT chip
+    assert text.startswith("welland does not offer welland:pi-sw2-p11 (condition attention); if the user wants")
+    assert text.endswith("; or claim its Tiny Tapeout board instead, which reaches this Pi without the option")
+    assert "Tiny Tapeout" not in not_offered(boards["welland:pi-sw1-p10"])
+
+
+async def test_offered_note_says_when_the_registry_is_stale(client, site):  # noqa: F811
+    use_conditions_registry(site)
+    board = by_id(await inventory(client, "welland"))["welland:pi-sw2-p38"]
+    assert offered_note(replace(board, stale=True)) == (
+        offered_note(board) + " (the fleet registry could not be refreshed; this may be out of date)"
+    )

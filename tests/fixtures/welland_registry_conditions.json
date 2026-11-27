@@ -1,0 +1,101 @@
+{
+ "site": "welland",
+ "generated_at": "2026-11-27T01:01:29.284497+00:00",
+ "machines": [
+  {
+   "serial": "00000000cc479fd1",
+   "hostname": "pi-sw1-p2",
+   "label": "Pi 3 Model B+ 1 GB 00000000cc479fd1",
+   "port": "sw1 p2",
+   "condition": "operational",
+   "offered": true,
+   "boards": [
+    {
+     "label": "Fomu",
+     "type": "Fomu",
+     "id": null,
+     "result": "pass",
+     "tests": {
+      "header": "pass",
+      "foboot": "pass",
+      "uart": "pass",
+      "flash": "pass",
+      "foboot-after": "pass",
+      "wiring": "pass"
+     }
+    }
+   ],
+   "check": {
+    "result": "pass",
+    "at": "2026-11-26T23:17:20.987964+00:00"
+   },
+   "setup_port": false,
+   "last_seen": "2026-11-27T01:00:58.748380+00:00",
+   "cameras": [
+    "ov5647"
+   ],
+   "network": {
+    "state": "routable",
+    "administrative_state": "configured",
+    "changed": "2026-11-26T23:16:54.588062+00:00",
+    "last_ack": "2026-11-27T00:59:43+00:00",
+    "last_ack_source": "gateway",
+    "boot_id": "b81026bb-e34d-4984-ab3d-ddafb56ad32e",
+    "current_boot": true,
+    "error": null
+   }
+  },
+  {
+   "serial": "02c000810b122044",
+   "hostname": "pi-sw2-p18",
+   "label": "Orange Pi PC 1 GB 02c000810b122044",
+   "port": "sw2 p18",
+   "condition": "missing",
+   "offered": false,
+   "boards": [],
+   "check": {
+    "result": "missing",
+    "at": "2026-10-17T04:12:39.002885+00:00"
+   },
+   "setup_port": false,
+   "last_seen": "2026-11-06T03:28:29.054137+00:00",
+   "cameras": [],
+   "network": {
+    "state": "routable",
+    "administrative_state": "configured",
+    "changed": "2026-10-17T04:12:38.583278+00:00",
+    "last_ack": "2026-10-17T04:12:21.970067+00:00",
+    "last_ack_source": "pi",
+    "boot_id": "79725bb3-66fa-4b9b-be94-f9e573cba692",
+    "current_boot": true,
+    "error": null
+   }
+  },
+  {
+   "serial": "80ba29ff33528664",
+   "hostname": "pi-sw2-p38",
+   "label": "Pi 5 1 GB 80ba29ff33528664",
+   "port": "sw2 p38",
+   "condition": "attention",
+   "offered": false,
+   "boards": [],
+   "check": {
+    "result": "missing",
+    "at": "2026-11-26T23:44:32.687397+00:00"
+   },
+   "setup_port": false,
+   "last_seen": "2026-11-27T01:00:33.519413+00:00",
+   "cameras": [],
+   "network": {
+    "state": "routable",
+    "administrative_state": "configured",
+    "changed": "2026-11-26T23:44:32.538416+00:00",
+    "last_ack": "2026-11-27T01:00:00+00:00",
+    "last_ack_source": "gateway",
+    "boot_id": "41972c29-18c8-4f4b-87a0-ec67ae16883e",
+    "current_boot": true,
+    "error": null
+   }
+  }
+ ]
+}

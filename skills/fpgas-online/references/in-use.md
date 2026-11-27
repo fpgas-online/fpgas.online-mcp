@@ -269,6 +269,10 @@ count, not the connection list.
   connection list holds something unexplained.
 - A host that does not answer ssh cannot be checked: say so and ask the user. A missing
   tool or an unreadable `who` gives `verdict: unknown`, not `idle`.
+- A welland Pi that is up but not offered (boards.md, "Pis welland does not offer") is
+  checked the same way, over ssh with the site password. The MCP tools check it only with
+  `allow_unoffered`, which the user must ask for; without it the verdict is `unknown` and says
+  so.
 
 ## tinytapeout
 

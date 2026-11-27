@@ -171,6 +171,7 @@ async def test_file_format_and_modes(store, tmp_path):
         "override_reason": None,
         "tt_state_at_claim": None,
         "host": None,
+        "allow_unoffered": False,
     }
     assert sorted(p.name for p in d.iterdir()) == [".lock", "welland_sw1-p1.json"]
 
@@ -365,3 +366,35 @@ async def test_two_stores_race_for_a_tt_board_and_its_pi_one_wins(tmp_path, cloc
         lost = [r for r in results if isinstance(r, ClaimConflict)]
         assert len(won) == 1 and len(lost) == 1 and lost[0].shared == PI
         await first.release(won[0].claim_id)
+
+
+async def test_allow_unoffered_stored_and_read_back(store, tmp_path, clock):
+    c = await store.claim(BOARD, 30, "x", "a@h", allow_unoffered=True)
+    assert c.allow_unoffered is True
+    data = json.loads((tmp_path / "claims" / "welland_sw1-p1.json").read_text())
+    assert data["allow_unoffered"] is True
+    assert ClaimStore(tmp_path, clock).get(c.claim_id).allow_unoffered is True  # another broker reads it
+    other = await store.claim("welland:sw1-p2", 30, "x", "a@h")
+    assert other.allow_unoffered is False
+
+
+async def test_renewal_keeps_the_stored_allow_unoffered(store):
+    c = await store.claim(BOARD, 30, "x", "a@h", allow_unoffered=True)
+    r = await store.claim(BOARD, 60, "y", "a@h", claim_id=c.claim_id)
+    assert r.allow_unoffered is True
+    plain = await store.claim("welland:sw1-p2", 30, "x", "a@h")
+    r = await store.claim("welland:sw1-p2", 60, "y", "a@h", claim_id=plain.claim_id, allow_unoffered=True)
+    assert r.allow_unoffered is False  # a renewal never widens a claim (it skips the in-use check)
+
+
+@pytest.mark.parametrize("value", [None, "yes", 1, "missing"])
+async def test_old_or_odd_claim_file_reads_allow_unoffered_false(store, tmp_path, value):
+    c = await store.claim(BOARD, 30, "x", "a@h", allow_unoffered=True)
+    path = tmp_path / "claims" / "welland_sw1-p1.json"
+    data = json.loads(path.read_text())
+    if value == "missing":
+        del data["allow_unoffered"]
+    else:
+        data["allow_unoffered"] = value
+    path.write_text(json.dumps(data))
+    assert store.get(c.claim_id).allow_unoffered is False

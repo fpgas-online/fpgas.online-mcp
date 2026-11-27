@@ -1,0 +1,102 @@
+{
+ "switches": [
+  {
+   "index": 1,
+   "title": "Switch 1: sw-netgear-gsm7252ps-s2 (GSM7252PS)",
+   "name": "sw-netgear-gsm7252ps-s2",
+   "model": "gsm7252ps",
+   "reachable": true,
+   "status": "answering",
+   "read_at": "2026-11-27 11:31:29",
+   "ports": [
+    {
+     "port": 1,
+     "link_up": false,
+     "poe_state": "searching",
+     "watts": "",
+     "can_power": true,
+     "machines": []
+    },
+    {
+     "port": 2,
+     "link_up": true,
+     "poe_state": "delivering",
+     "watts": "4.2",
+     "can_power": true,
+     "machines": [
+      {
+       "serial": "00000000cc479fd1",
+       "setup_port": false,
+       "url": "/fleet/00000000cc479fd1/",
+       "label": "Pi 3 Model B+ 1 GB 00000000cc479fd1",
+       "condition": "operational",
+       "board": "Fomu"
+      }
+     ]
+    },
+    {
+     "port": 10,
+     "link_up": true,
+     "poe_state": "delivering",
+     "watts": "8.7",
+     "can_power": true,
+     "machines": [
+      {
+       "serial": "000000004fe3e7e4",
+       "setup_port": false,
+       "url": "/fleet/000000004fe3e7e4/",
+       "label": "Pi 3 Model B+ 1 GB 000000004fe3e7e4",
+       "condition": "attention",
+       "board": "NeTV2"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "index": 2,
+   "title": "Switch 2: sw-netgear-s3300-1 (S3300)",
+   "name": "sw-netgear-s3300-1",
+   "model": "s3300",
+   "reachable": true,
+   "status": "answering",
+   "read_at": "2026-11-27 11:31:29",
+   "ports": [
+    {
+     "port": 11,
+     "link_up": true,
+     "poe_state": "delivering",
+     "watts": "2.9",
+     "can_power": true,
+     "machines": [
+      {
+       "serial": "00000000665fad00",
+       "setup_port": false,
+       "url": "/fleet/00000000665fad00/",
+       "label": "Pi 3 Model B+ 1 GB 00000000665fad00",
+       "condition": "operational",
+       "board": "TT chip"
+      }
+     ]
+    },
+    {
+     "port": 38,
+     "link_up": true,
+     "poe_state": "delivering",
+     "watts": "4.2",
+     "can_power": true,
+     "machines": [
+      {
+       "serial": "80ba29ff33528664",
+       "setup_port": false,
+       "url": "/fleet/80ba29ff33528664/",
+       "label": "Pi 5 1 GB 80ba29ff33528664",
+       "condition": "attention",
+       "board": "no board"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
