@@ -14,7 +14,7 @@ from . import __version__
 from .paths import PathTooLong, runtime_dir, state_dir
 from .protocol import MAX_LINE, PROTOCOL, BrokerError, decode, encode
 
-__all__ = ["BrokerClient", "BrokerError", "connect", "version_tuple"]
+__all__ = ["BrokerClient", "BrokerError", "connect", "ignored_option", "version_tuple"]
 
 START_TIMEOUT_S = 5.0
 POLL_S = 0.05
@@ -72,6 +72,25 @@ class BrokerClient:
         self._writer.close()
         with contextlib.suppress(ConnectionError):
             await self._writer.wait_closed()
+
+
+def ignored_option(op: str, args: dict, result: Any) -> str | None:
+    """A warning when the broker ignored allow_unoffered, else None.
+
+    The option is optional on the wire (no protocol bump): a client sends it only when it is on, and a
+    broker that knows it says "allow_unoffered": true in its board_status and claim_board results. A
+    broker from before the option ignores unknown arguments, so its result lacks that key.
+    """
+    if not args.get("allow_unoffered") or not isinstance(result, dict) or "allow_unoffered" in result:
+        return None
+    text = "the running broker is older than the allow_unoffered option and ignored allow_unoffered"
+    if op == "claim_board":
+        text += (
+            f": claim {result.get('claim_id')} was taken without it, so connect and run cannot reach a Pi the "
+            "site does not offer; release_board it, and ask the user to restart the older fpgas-online sessions "
+            "(a newer broker takes over once the old one is idle)"
+        )
+    return text
 
 
 def _sock_path() -> Path:

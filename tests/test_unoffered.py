@@ -13,7 +13,7 @@ import pytest
 from test_broker import env  # noqa: F401  (fixture)
 from test_mcp import HERE, call, ok, stack  # noqa: F401  (fixture)
 
-from fpgas_online_mcp import client, paths
+from fpgas_online_mcp import client, mcp_server, paths
 from fpgas_online_mcp.client import BrokerError
 from fpgas_online_mcp.inuse import Verdict
 
@@ -279,3 +279,87 @@ async def test_board_status_that_fits_keeps_every_test(stack):  # noqa: F811
     async with stack.session() as c:
         status = ok(await call(c, "board_status", board=UNOFFERED))
     assert all(len(b["tests"]) == 5 for b in status["board"]["boards"]) and "cut" not in status["board"]
+
+
+# --- the MCP tools, the CLI, and brokers of other versions ----------------------------------------
+
+
+async def test_only_board_status_and_claim_board_take_the_option(stack):  # noqa: F811
+    async with stack.session() as c:
+        tools = {t.name: t for t in (await c.list_tools()).tools}
+    for name in ("board_status", "claim_board"):
+        prop = tools[name].input_schema["properties"]["allow_unoffered"]
+        assert prop["type"] == "boolean" and prop["default"] is False
+        assert "only when the user asks" in prop["description"].lower()
+        assert "allow_unoffered" in tools[name].description
+    for name in ("connect", "run", "power_cycle", "list_boards", "release_board"):
+        assert "allow_unoffered" not in tools[name].input_schema["properties"]
+
+
+async def test_the_tools_end_to_end(stack):  # noqa: F811
+    async with stack.session() as c:
+        claim = ok(await call(c, "claim_board", board=UNOFFERED, purpose="look", allow_unoffered=True))
+        assert claim["allow_unoffered"] is True and claim["offered_note"] == NOTE
+        info = ok(await call(c, "connect", board=UNOFFERED))
+        assert info["offered_note"] == NOTE
+        status = ok(await call(c, "board_status", board=UNOFFERED, check_use=False, allow_unoffered=True))
+        assert status["offered_note"] == NOTE and status["board"]["claim"]["allow_unoffered"] is True
+
+
+class RecordingConn:
+    """A broker connection that answers like an older broker: it ignores allow_unoffered."""
+
+    def __init__(self):
+        self.broken, self.calls = False, []
+
+    async def call(self, op, **args):
+        self.calls.append((op, args))
+        if op == "claim_board":
+            return {"claim_id": "c-old", "board": args["board"], "expires": "x"}
+        return {"board": {"id": args.get("board")}}
+
+    async def close(self):
+        pass
+
+
+async def frontend():
+    conn = RecordingConn()
+
+    async def connect(holder):
+        return conn
+
+    return mcp_server.Frontend("me@host", connect), conn
+
+
+async def test_the_front_end_sends_the_option_only_when_it_is_on():
+    fe, conn = await frontend()
+    await fe.tool("board_status", board=UNOFFERED, check_use=True, allow_unoffered=False)
+    await fe.tool("claim_board", board=UNOFFERED, purpose="x", allow_unoffered=False)
+    assert all("allow_unoffered" not in args for _, args in conn.calls)  # an older broker sees what it knows
+
+
+async def test_an_older_broker_that_ignores_the_option_is_reported():
+    fe, conn = await frontend()
+    result = await fe.tool("claim_board", board=UNOFFERED, purpose="x", allow_unoffered=True)
+    text = result.content[0].text
+    data = json.loads(text)
+    assert conn.calls[-1][1]["allow_unoffered"] is True
+    assert "older" in data["warning"] and "ignored allow_unoffered" in data["warning"]
+    assert "release_board" in data["warning"] and "c-old" in data["warning"]
+    assert fe.claim_ids == ["c-old"]  # still remembered, so it can be released
+    result = await fe.tool("board_status", board=UNOFFERED, allow_unoffered=True)
+    assert "ignored allow_unoffered" in json.loads(result.content[0].text)["warning"]
+
+
+async def test_cli_status_and_claim_with_the_option(stack, capsys):  # noqa: F811
+    from test_cli import cli
+
+    code, out, err = await cli(capsys, "status", UNOFFERED, "--allow-unoffered")
+    assert code == 0 and NOTE in out and "boot check: fail" in out and "fleet page: https://welland" in out
+    assert "switch port: link up, PoE delivering, 8.7 W" in out
+    code, out, err = await cli(capsys, "claim", UNOFFERED, "--purpose", "look", "--allow-unoffered")
+    assert code == 0 and NOTE in out and "allow_unoffered" in out
+    code, out, err = await cli(capsys, "claims")
+    assert code == 0 and "(allow_unoffered)" in out
+    code, out, err = await cli(capsys, "claim", MISSING, "--purpose", "look", "--allow-unoffered")
+    assert code == 1 and "is missing (not checking in)" in err
