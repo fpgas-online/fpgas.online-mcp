@@ -10,7 +10,9 @@ Full docs: https://docs.fpgas.online/en/latest/user/index.html
 `ControlPersist` masters, the site's own checks), so a count of logins says little. Look
 for recent activity. The rule used below:
 
-> Activity in the last **15 minutes (900 s)** means in use. Nothing for 15 minutes means idle.
+> A key press in tmux in the last **5 minutes (300 s)**, or other activity (an ssh terminal,
+> a change in `~/Uploads`) in the last **15 minutes (900 s)**, means in use, and so does any
+> command running for another login. Nothing like that means idle.
 
 Idle is not a promise: someone may be reading the screen or the camera. Tell the user which
 board you are about to disturb.
@@ -140,13 +142,22 @@ It reuses your master connection from ssh.md (the first call opens it). It print
   one address (see limits). Entries in this list are not use by themselves. On `pi21` six
   old connections from the site gateway were listed with nothing running in them.
 - `tmux clients` lists attached terminals with their idle seconds (the key-press clock of
-  that client). `tmux: no clients (...)` means tmux has no server: no interactive terminal is
-  open (the server exits when the last one closes).
+  that client, `#{client_activity}`). A client with a key press under 300 s means in use.
+  `tmux: no clients (...)` means tmux has no server: no interactive terminal is open (the
+  server exits when the last one closes).
 - `tmux windows running a program` lists tmux windows whose process has a child process (a
   command, a script, a backgrounded `job &`), or is itself not a shell (`zsh`, `bash`, `sh`)
-  or the help window's `tail`: a build or capture someone started in the web terminal and
-  left running. It has no key presses and no sshd parent, so no other signal sees it once it
-  runs past 15 minutes. Any line here means in use. A shell at its prompt has no child.
+  or the help window's `tail` (a build or capture someone started in the web terminal), and
+  whose session had a key press in the last 300 s. Any line here means in use. A shell at its
+  prompt has no child. The key-press time is the session's `#{session_activity}`: tmux moves
+  it when someone presses a key in that session (or attaches to it, or creates it), not when a
+  program writes output, so a redrawing `htop` does not keep it fresh; `tmux send-keys` does
+  not move it either. A window whose session time tmux does not give counts as in use.
+- `tmux windows running a program, idle` lists the same kind of window whose session had no
+  key press for 300 s, with the minutes since the last one
+  (`window pid 123 (minicom), no key press for 18 min: minicom ...`). Nobody is typing there,
+  so it is not use, but the program is still running: tell the user which one your work would
+  disturb.
 - `ssh terminals` lists logins that have a terminal, with idle time from `who -u` (accurate
   to the minute; `old` counts as a day; the script finds the idle field by its shape, so a
   different column layout is tolerated). This covers a terminal that is not in tmux.
@@ -158,11 +169,16 @@ It reuses your master connection from ssh.md (the first call opens it). It print
   `~/Uploads`, so this is the only signal for them. tmux is skipped (counted above) and so
   is an `sftp-server` older than 15 minutes (an idle file-transfer session, such as the
   site's). Any command listed means in use, however long it has run.
-- The verdict line: `in use` with one `active:` line per signal (under 900 s, or any command
-  above), `unknown (treat as in use)` when the script could not check something (a tool is
-  missing on the host, tmux said something unexpected, a `who` line did not parse, or it
-  could not find your own login), otherwise `idle`. Treat `unknown` like `in use`: ask the
-  user.
+- The verdict line: `in use` with one `active:` line per signal (a tmux key press under
+  300 s, an ssh terminal or `~/Uploads` change under 900 s, a tmux window running a program,
+  or any command for another login), `unknown (treat as in use)` when the script could not
+  check something (a tool is missing on the host, tmux said something unexpected, a `who`
+  line did not parse, or it could not find your own login), otherwise `idle`. Treat
+  `unknown` like `in use`: ask the user.
+
+The outputs below were measured before the script printed the `tmux windows running a
+program, idle (no key press for 300 s):` line, which it now prints right after `tmux windows
+running a program:`.
 
 An idle host prints (measured on ps1 `pi21`; the six lines are old connections from the
 site gateway, listed but not use; `::ffff:` is how the host writes an IPv4 address):
@@ -186,8 +202,10 @@ The `tmux: no clients (...)` line is not a failure: the message is `no server ru
 where nobody had logged in). Any other tmux message gives `unknown`. A tmux server whose
 windows ran a `bash` script sleeping in `sleep 120`, a `sleep 120 &` typed at a shell
 prompt, an idle shell and `tail` (a private test server on `pi-sw1-p2`) listed the first two
-only, with `active: a program running in a tmux window`. The old `sftp-server`
-sessions of the gateway are not listed (they were, before the 15-minute exception).
+only, with `active: a program running in a tmux window` (measured before the 5-minute rule:
+now they count only while their session had a key press in the last 5 minutes). The old
+`sftp-server` sessions of the gateway are not listed (they were, before the 15-minute
+exception).
 
 Another agent running `ssh host 'sleep 60'` (a separate non-interactive connection, no
 terminal; measured on `pi21`) prints:
@@ -259,16 +277,20 @@ count, not the connection list.
   Typing `exit` there ended that window for everyone in testing (the tmux server went away,
   closing every attached terminal). On welland `pi-sw1-p2` each login is its own bash. Use
   non-interactive `ssh host cmd` for your own work.
-- **Someone only watching** the web page, the camera, or a tmux window that has not been
-  touched for 15 minutes is not detected. A viewer who is reading is not "using" the
+- **Someone only watching** the web page, the camera, or a tmux window that has had no key
+  press for 5 minutes is not detected. A viewer who is reading is not "using" the
   board by the activity rule.
 - **A long job in the web terminal** (a 20-minute build watched on the camera): on ps1 it is
   seen only through `tmux windows running a program` (its shell runs under the tmux server,
-  not sshd, and nobody presses keys). A job that is a shell busy on its own, with no child
-  process, is missed there. On welland the login shell is a child of sshd, so `commands
+  not sshd), and only for 5 minutes after the last key press in its session; after that it
+  is listed under `tmux windows running a program, idle` and the verdict can be `idle`. Tell
+  the user what is running before you disturb it. A job that is a shell busy on its own, with
+  no child process, is missed there. On welland the login shell is a child of sshd, so `commands
   running for other logins` lists it while the terminal is open, job or not.
-- **A forgotten program** left running in a tmux window (`minicom`, `htop`) keeps the host
-  `in use` until someone ends it. That errs on the safe side: ask the user.
+- **A forgotten program** left running in a tmux window (`minicom`, `htop`) counts as in use
+  for 5 minutes after the last key press in its session, then as idle, listed with its pid,
+  program and minutes since the last key press. Tell the user which program your work will
+  disturb (a power cycle ends it).
 - **Nothing shows web-page viewers** on welland or ps1: the page itself opens no
   connection until the terminal panel runs.
 - **No claim or reservation system** exists yet (the MCP server is planned to add one).
@@ -348,5 +370,6 @@ Nothing is changed by these GETs; poll at most every 10 s.
 
 - In use: do not cycle, do not load, do not write to `~/Uploads`. Pick another host
   (boards.md) or tell the user who and since when (the `tmux clients` line).
-- Idle: go ahead, and tell the user. Run the check again just before a destructive step.
+- Idle: go ahead, and tell the user, naming any program still running in an idle tmux
+  window. Run the check again just before a destructive step.
 - Unsure: ask.

@@ -206,7 +206,13 @@ the Tiny Tapeout rule against `status.json`. Verdicts: `idle`, `in use`, `unknow
 the local claim. Callers treat `unknown` as `in use`. Since 2026-11-27 (2026-11-27-tt-boards-over-ssh-design.md) a Tiny
 Tapeout board gets both: the script on its welland Pi and the site rule, combined (in use if
 either says so, else unknown if either does, else idle); a welland Pi that carries a Tiny
-Tapeout board gets that board's site rule as well.
+Tapeout board gets that board's site rule as well. Since 2026-11-27
+(2026-11-27-tmux-idle-design.md) tmux key presses count for 5 minutes (300 s): a tmux client
+with a key press under 300 s is in use, and a program in a tmux window is in use only while
+its session (`#{session_activity}`, which key presses move and output does not) had a key
+press under 300 s; otherwise it is a signal on the verdict, naming its pid, the program and the
+minutes since the last key press. ssh terminals and `~/Uploads` stay at 15 minutes (900 s),
+and a command running for another login is always in use.
 
 **The claim holder's own activity.** For the holder of a live claim, two signals are
 discounted because they are the holder's own doing: `~/Uploads` changes newer than the
