@@ -20,6 +20,7 @@ import pytest
 from mcp import Client, StdioServerParameters
 from test_broker import env  # noqa: F401  (fixture)
 from test_sites import Site
+from tmpdir import TEST_TMP
 
 import fpgas_online_mcp
 from fpgas_online_mcp import client, guide, mcp_server, ops, paths
@@ -33,7 +34,7 @@ from fpgas_online_mcp.sites import SiteClient
 from fpgas_online_mcp.ssh import SshManager
 
 HERE = Path(__file__).parent
-REPO_TMP = HERE.parent / "tmp"
+REPO_TMP = TEST_TMP
 TOOLS = {"guide", "list_boards", "board_status", "claim_board", "release_board", "connect", "run", "power_cycle"}
 WELLAND = "welland:pi-sw1-p2"
 UNTRUSTED = '<board-output untrusted="true">'

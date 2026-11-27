@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from tmpdir import TEST_TMP
 
 from fpgas_online_mcp import ssh as ssh_mod
 from fpgas_online_mcp.boards import BoardId, ssh_port
@@ -23,7 +24,7 @@ from fpgas_online_mcp.ssh import PortMismatch, SshManager, wrap_untrusted
 
 SECRET = "s3cr3tpw"
 HERE = Path(__file__).parent
-TMP = HERE.parent / "tmp"
+TMP = TEST_TMP
 
 
 class FakeSites:

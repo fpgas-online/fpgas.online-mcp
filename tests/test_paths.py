@@ -6,11 +6,12 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from tmpdir import TEST_TMP
 
 from fpgas_online_mcp import paths
 
 XDG = ("XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME")
-REPO_TMP = Path(__file__).resolve().parent.parent / "tmp"
+REPO_TMP = TEST_TMP
 
 
 @pytest.fixture
