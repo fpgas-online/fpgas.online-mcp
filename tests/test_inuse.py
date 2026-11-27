@@ -447,6 +447,8 @@ async def test_tt_holder_state_change_ignored():
 async def test_tt_holder_discount_needs_loaded_at_claim_and_does_not_cover_clients():
     v, _, _ = await run_tt(tt("waiting"), c=ttc(None))
     assert v.verdict == "in use"
+    v, _, _ = await run_tt(tt("waiting"), c=ttc("in use"))
+    assert v.verdict == "in use"
     v, _, _ = await run_tt(tt("waiting", clients=2), c=ttc("loaded"))
     assert v.verdict == "in use"
 
@@ -654,3 +656,13 @@ async def test_a_tt_board_never_uses_the_option_on_its_pi():
     await inuse.check(board("tinytapeout", "fpga-2"), ssh, FakeSites(tt("loaded"), tt("loaded")), None, clock=ft,
                       sleep=ft.sleep, now=lambda: NOW, allow_unoffered=True)  # fmt: skip
     assert ssh.via == BoardId("tinytapeout", "fpga-2") and ssh.allow_unoffered is False
+
+
+async def test_tt_holder_discount_covers_a_claim_taken_on_a_left_design():
+    """A board claimed while a design was left on it (idle) gets the same discount as `loaded`."""
+    v, _, _ = await run_tt(tt("waiting"), c=ttc("left: old"))
+    assert v.verdict == "idle"
+    v, _, _ = await run_tt(tt("left: mine"), c=ttc("left: the SDK is not running"))
+    assert v.verdict == "idle"
+    v, _, _ = await run_tt(tt("waiting", clients=1), c=ttc("left: old"))
+    assert v.verdict == "in use"

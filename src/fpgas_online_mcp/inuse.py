@@ -5,8 +5,8 @@ rule. Verdicts: idle, in use, unknown ("unknown" is never "idle").
 Two checks combine as: in use if either says so, else unknown if either says so, else idle.
 
 The claim holder's own activity is discounted (spec, "In-use check"): `~/Uploads` changes newer
-than the claim's start, and on Tiny Tapeout `waiting` / `left: ...` after a `loaded` state at
-claim time. Every other signal still counts.
+than the claim's start, and on Tiny Tapeout `waiting` / `left: ...` after an idle state at claim
+time (`loaded` or `left: ...`). Every other signal still counts.
 """
 
 import asyncio
@@ -261,9 +261,15 @@ def _usable_status(status: dict, entry) -> str | None:
     return None
 
 
+def _idle_tt_state(state: str | None) -> bool:
+    """Whether a Tiny Tapeout `idle_display.state` counts as idle: the idle display (`loaded`), or a
+    design left on the board with nobody using it (`left: ...`)."""
+    return isinstance(state, str) and (state == "loaded" or state.startswith("left:"))
+
+
 async def _check_tt(board: Board, sites, claim: Claim | None, clock, sleep, now) -> Verdict:
     live, claim_notes = _live_claim(board, claim, now)
-    holder_loaded = live is not None and live.tt_state_at_claim == "loaded"
+    holder_loaded = live is not None and _idle_tt_state(live.tt_state_at_claim)
     first_ok: float | None = None
     waiting = 0
     for _ in range(TT_MAX_READS):
