@@ -9,7 +9,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
-from . import __version__
+from . import __version__, config
 from .client import BrokerClient, BrokerError, connect, ignored_option, version_tuple
 from .fleet import SECTIONS
 from .protocol import PROTOCOL
@@ -362,6 +362,11 @@ async def _broker_cmd(args: argparse.Namespace) -> tuple[Any, str | None, int]:
         if args.action == "status":
             info = await c.call("ping")
             text = f"running: version {info['version']}, pid {info['pid']}, started {when_epoch(info['started'])}"
+            la = info.get("last_activity_s")
+            if isinstance(la, int):
+                text += f"\nlast activity window: {la} s (last_activity in {config.path()})"
+            elif la is not None:
+                text += f"\nlast activity window: config error, every in-use check says unknown: {la}"
             if info.get("protocol", 1) != PROTOCOL:
                 text += (
                     f"\nthis CLI speaks protocol {PROTOCOL}, the broker {info.get('protocol', 1)}: board commands fail"

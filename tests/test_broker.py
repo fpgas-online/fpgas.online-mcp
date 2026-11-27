@@ -399,3 +399,15 @@ def test_failed_spawn_is_a_broker_error(env, monkeypatch):
     with pytest.raises(BrokerError) as e:
         client._spawn()
     assert e.value.code == "start_failed" and "broker.log" in e.value.message
+
+
+async def test_ping_says_the_last_activity_window(running, own_config_dir):
+    c = await client.connect("me@host", spawn=False)
+    assert (await c.call("ping"))["last_activity_s"] == 300
+    (own_config_dir / "fpgas-online").mkdir(mode=0o700, exist_ok=True)
+    (own_config_dir / "fpgas-online" / "config.toml").write_text('last_activity = "10m"\n')
+    assert (await c.call("ping"))["last_activity_s"] == 600
+    (own_config_dir / "fpgas-online" / "config.toml").write_text('last_activity = "soon"\n')
+    said = (await c.call("ping"))["last_activity_s"]
+    assert isinstance(said, str) and "config.toml" in said and "soon" in said
+    await c.close()

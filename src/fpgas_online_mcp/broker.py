@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, config
 from .paths import cache_dir, runtime_dir, state_dir
 from .protocol import MAX_LINE, PROTOCOL, BrokerError, decode, encode, error_response
 
@@ -64,7 +64,17 @@ class Broker:
         self._stop.set()
 
     async def _ping(self, args: dict, conn: Conn) -> dict:
-        return {"version": self.version, "protocol": self.protocol, "pid": os.getpid(), "started": self.started}
+        try:
+            last_activity: int | str = config.last_activity_s()
+        except config.ConfigError as e:
+            last_activity = str(e)  # said, not hidden: every in-use check says unknown until it is fixed
+        return {
+            "version": self.version,
+            "protocol": self.protocol,
+            "pid": os.getpid(),
+            "started": self.started,
+            "last_activity_s": last_activity,
+        }
 
     async def _shutdown_if_idle(self, args: dict, conn: Conn) -> dict:
         """Stop after replying, unless claims exist, another client is connected or another request runs."""
