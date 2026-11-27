@@ -705,14 +705,14 @@ async def op_fleet_details(state: State, args: dict, conn: Conn) -> dict:
                 "site_unavailable", f"cannot read welland's page of {host}: {e}; try again in a minute"
             ) from e
         # A site without machine.json yet: the registry entry, its switch port row and the page link.
-        port = None
+        port, port_error = None, None
         if "switch_port" in sections:
             try:
                 switches, _ = await state.sites.welland_switches()
                 port = fleet.find_port(switches, serial, host.name)
             except SiteError as e2:
-                head["switch_port_error"] = f"cannot read welland's switches: {e2}"
-        data = fleet.fallback(entry, port)
+                port_error = f"cannot read welland's switches: {e2}"
+        data = fleet.fallback(entry, port, port_error)
         head["as_of"] = registry_as_of
     else:
         if cached.stale:

@@ -166,7 +166,28 @@ def test_fallback_from_the_registry_and_the_switch_row():
 def test_fallback_without_a_switch_row():
     entry = next(m for m in registry() if m["hostname"] == "pi-sw1-p2")
     r = fleet.details(fleet.fallback(entry, None), ["switch_port"], HOSTNAMES)
-    assert r["switch_port"] is None
+    assert r["switch_port"] == {"error": "no switch port lists this Pi now"}
+    r = fleet.details(fleet.fallback(entry, None, "cannot read welland's switches"), ["switch_port"], HOSTNAMES)
+    assert r["switch_port"] == {"error": "cannot read welland's switches"}
+
+
+def test_switch_port_error_from_machine_json():
+    data = machine()
+    data["switch_port"] = None
+    data["switch_port_error"] = "the switches cannot be read"
+    assert fleet.details(data, ["switch_port"], HOSTNAMES)["switch_port"] == {"error": "the switches cannot be read"}
+
+
+def test_display_marks_and_extra_fields_of_the_site():
+    """The site's switch_port row carries display marks (net, link); later additions pass through."""
+    data = machine()
+    assert data["switch_port"]["net"] == "\u2713" and data["switch_port"]["link"] == "\u2191"
+    data["machine"]["condition_reason"] = "its check failed"
+    data["console"]["count"] = 40
+    r = fleet.details(data, ["machine", "switch_port", "console"], HOSTNAMES)
+    assert "net" not in r["switch_port"] and "link" not in r["switch_port"]
+    assert "\u2713" not in compact(r) and "\u2191" not in compact(r)
+    assert r["machine"]["condition_reason"] == "its check failed" and r["console"]["count"] == 40
 
 
 # --- switch_ports ---------------------------------------------------------------------------------

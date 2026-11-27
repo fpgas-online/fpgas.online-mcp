@@ -113,7 +113,7 @@ def find_port(switches: list[dict], serial: str | None, hostname: str | None) ->
     return by_name
 
 
-def fallback(entry: dict, port: tuple[int | None, dict] | None) -> dict:
+def fallback(entry: dict, port: tuple[int | None, dict] | None, port_error: str | None = None) -> dict:
     """A machine.json-shaped dict from the registry entry and its switch port, for a site without
     machine.json (it answers 404). The sections only machine.json has are listed as unavailable."""
     serial = entry.get("serial")
@@ -129,6 +129,8 @@ def fallback(entry: dict, port: tuple[int | None, dict] | None) -> dict:
     if port is not None:
         data["switch_port"] = port[1]
         data["switch_index"] = port[0]
+    else:
+        data["switch_port_error"] = port_error or "no switch port lists this Pi now"
     return data
 
 
@@ -171,6 +173,8 @@ def _section(name: str, data: dict, names: dict[str, str], offset: int, limit: i
         value = {"error": data["network_error"]}
     elif name == "switch_port" and isinstance(value, dict):
         value = port_view(value, names, data.get("switch_index"))
+    elif name == "switch_port" and value is None and data.get("switch_port_error"):
+        value = {"error": data["switch_port_error"]}
     elif name == "console":
         if isinstance(value, dict):
             extra = {k: v for k, v in value.items() if k != "lines"}
