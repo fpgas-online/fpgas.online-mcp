@@ -85,10 +85,11 @@ def ignored_option(op: str, args: dict, result: Any) -> str | None:
         return None
     text = "the running broker is older than the allow_unoffered option and ignored allow_unoffered"
     if op == "claim_board":
-        text += (
-            f": claim {result.get('claim_id')} was taken without it, so connect and run cannot reach a Pi the "
-            "site does not offer; release_board it, and ask the user to restart the older fpgas-online sessions "
-            "(a newer broker takes over once the old one is idle)"
+        claim_id = result.get("claim_id")
+        text = (
+            f"release_board {claim_id}: {text}, so this claim was taken without it and connect and run cannot "
+            "reach a Pi the site does not offer; ask the user to restart the older fpgas-online sessions (a newer "
+            "broker takes over once the old one is idle)"
         )
     return text
 

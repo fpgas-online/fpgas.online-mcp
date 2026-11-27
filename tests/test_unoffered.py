@@ -391,8 +391,8 @@ async def test_an_older_broker_that_ignores_the_option_is_reported():
     text = result.content[0].text
     data = json.loads(text)
     assert conn.calls[-1][1]["allow_unoffered"] is True
+    assert data["warning"].startswith("release_board c-old: ")
     assert "older" in data["warning"] and "ignored allow_unoffered" in data["warning"]
-    assert "release_board" in data["warning"] and "c-old" in data["warning"]
     assert fe.claim_ids == ["c-old"]  # still remembered, so it can be released
     result = await fe.tool("board_status", board=UNOFFERED, allow_unoffered=True)
     assert "ignored allow_unoffered" in json.loads(result.content[0].text)["warning"]
