@@ -198,6 +198,9 @@ async def test_tool_list_and_annotations(stack):
     # durations are stated where they are long
     for name in ("board_status", "claim_board", "power_cycle"):
         assert "minute" in tools[name].description
+    # a hung board reads unknown: the description says how to cycle it and that in use never is
+    cycle = tools["power_cycle"].description
+    assert "override_reason" in cycle and "never one that reads in use" in cycle
     schema = tools["claim_board"].input_schema
     assert set(schema["required"]) == {"board", "purpose"}
     assert schema["properties"]["minutes"]["default"] == 30 and schema["properties"]["minutes"]["maximum"] == 240

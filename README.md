@@ -74,6 +74,14 @@ verified), so expect only the HTTPS parts to work there.
 `connect`, `run` and `power_cycle` need your claim. Unknown in-use state counts
 as in use.
 
+A board that is down (a hung Pi, say) reads `unknown`. To recover it, claim it
+with `override_reason` (only when the user agrees; the reason is shown to
+everyone) and `power_cycle` cycles it; a board that reads `in use` is never
+cycled, override or not. When the board's current boot cannot be read before the
+toggle, it counts as back only when it answers with a boot younger than the
+toggle (Tiny Tapeout: `uptime_s`; welland and ps1: the host's `/proc/uptime`,
+read over ssh with its boot id), never because it merely answers.
+
 welland offers a Pi (lists it on `/fpgas/`, with a board page) only when its boot
 check passed. A Pi that is up but not offered (condition `attention`) still takes
 ssh; `board_status` and `claim_board` reach one with `allow_unoffered`, which an

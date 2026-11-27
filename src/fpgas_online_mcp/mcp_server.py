@@ -409,8 +409,10 @@ def build_server(fe: Frontend) -> MCPServer:
             power_cycle,
             "Power-cycle a claimed board through the site and wait until it has really rebooted. This ends "
             "every session on the board and wipes the host: tell the user first. Needs your claim and a fresh "
-            "in-use check that sees nobody else. Slow: the check (up to 3 minutes on Tiny Tapeout) plus up to "
-            "5 minutes waiting for the board, so allow about 8 minutes.",
+            "in-use check that sees nobody else. A board that is down (hung) reads unknown: claim it with "
+            "override_reason (only if the user agrees) and this cycles it, never one that reads in use; it is "
+            "then back only on a boot younger than the toggle. Slow: the check (up to 3 minutes on Tiny "
+            "Tapeout) plus up to 5 minutes waiting for the board, so allow about 8 minutes.",
             _hints(False, True, False, destructive=True, title="Power-cycle a board"),
         ),
         (
