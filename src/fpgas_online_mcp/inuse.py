@@ -68,7 +68,7 @@ _UNKNOWN_MARKERS = (
 )
 _CONN = re.compile(r"^  (\S+)$")
 _TMUX_CLIENT = re.compile(r"^  (/dev/\S+ \S+ idle \d+ s)$")
-# a program in a tmux window whose session had no key press for 5 minutes: not use, but the agent
+# a program in a tmux window whose session had no key press for the last-activity window: not use, but the agent
 # should tell the user what it would disturb
 _IDLE_WINDOW = re.compile(r"^  window pid (\d+) \((.*?)\), no key press for (\d+) min: (.*)$")
 

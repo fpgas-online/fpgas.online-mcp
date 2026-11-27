@@ -411,3 +411,17 @@ async def test_ping_says_the_last_activity_window(running, own_config_dir):
     said = (await c.call("ping"))["last_activity_s"]
     assert isinstance(said, str) and "config.toml" in said and "soon" in said
     await c.close()
+
+
+async def test_ping_never_fails_on_the_config(running, monkeypatch):
+    """ping is the handshake: a config directory that cannot be made must not break every connection."""
+    from fpgas_online_mcp import config  # noqa: PLC0415
+
+    def broken():
+        raise PermissionError("read-only file system")
+
+    monkeypatch.setattr(config, "path", broken)
+    c = await client.connect("me@host", spawn=False)
+    info = await c.call("ping")
+    assert info["config_file"] is None and "read-only" in info["last_activity_s"]
+    await c.close()

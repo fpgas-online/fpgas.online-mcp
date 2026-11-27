@@ -17,7 +17,6 @@ from fpgas_online_mcp.boards import Board, BoardId
         ('last_activity = "90"\n', 90),
         ("last_activity = 120\n", 120),
         ('last_activity = " 10m "\n', 600),
-        ("other = 1\n", config.DEFAULT_LAST_ACTIVITY_S),
         ("", config.DEFAULT_LAST_ACTIVITY_S),
     ],
 )
@@ -86,3 +85,21 @@ async def test_a_bad_config_makes_the_check_unknown(own_config_dir):
 class _NeverSsh:
     async def run(self, *a, **k):
         raise AssertionError("ssh must not run with a bad config")
+
+
+@pytest.mark.parametrize("text", ['last_activty = "15m"\n', '[broker]\nlast_activity = "15m"\n'])
+def test_an_unknown_setting_is_an_error(own_config_dir, text):
+    """A typo or a table must not leave the user believing their value is in force."""
+    f = own_config_dir / "config.toml"
+    f.write_text(text)
+    with pytest.raises(config.ConfigError, match="unknown setting"):
+        config.last_activity_s(f)
+
+
+def test_a_config_dir_that_cannot_be_made_is_a_config_error(monkeypatch):
+    def broken():
+        raise PermissionError("read-only file system")
+
+    monkeypatch.setattr(config, "path", broken)
+    with pytest.raises(config.ConfigError, match="read-only"):
+        config.last_activity_s()

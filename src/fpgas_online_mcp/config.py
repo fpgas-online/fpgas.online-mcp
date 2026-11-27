@@ -21,6 +21,7 @@ MIN_LAST_ACTIVITY_S = 30
 MAX_LAST_ACTIVITY_S = 86400
 _DURATION = re.compile(r"(\d+)\s*(s|m|h)?")
 _UNIT_S = {None: 1, "s": 1, "m": 60, "h": 3600}
+KEYS = {"last_activity"}
 
 
 class ConfigError(ValueError):
@@ -44,13 +45,16 @@ def parse_duration(value: object) -> int:
 
 def last_activity_s(file: Path | None = None) -> int:
     """The last-activity window in seconds: config.toml's `last_activity`, else the default."""
-    file = path() if file is None else file
     try:
+        file = path() if file is None else file  # creating the config dir can fail too
         data = tomllib.loads(file.read_text())
     except FileNotFoundError:
         return DEFAULT_LAST_ACTIVITY_S
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
-        raise ConfigError(f"{file}: cannot be read: {e}") from e
+        raise ConfigError(f"{file or 'the config directory'}: cannot be read: {e}") from e
+    if unknown := sorted(set(data) - KEYS):
+        # the file has one setting: a typo or a table must not leave the user believing it is in force
+        raise ConfigError(f"{file}: unknown setting(s) {', '.join(unknown)}; the only one is last_activity")
     if "last_activity" not in data:
         return DEFAULT_LAST_ACTIVITY_S
     try:

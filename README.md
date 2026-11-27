@@ -172,8 +172,8 @@ last_activity = "5m"        # or "300s", "1h", or a number of seconds; 30 s to 2
 
 The broker reads the file again on every in-use check, so an edit applies to the next check
 without a restart. `fpgas-online broker status` shows the value in use. A value that cannot be
-read is not replaced by the default: every in-use check says unknown (never idle) and names the
-file until it is fixed.
+read, or any other key in the file (a typo, a table), is not replaced by the default: every
+in-use check says unknown (never idle) and names the file until it is fixed.
 
 ## Stopping the broker
 

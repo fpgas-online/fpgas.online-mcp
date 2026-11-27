@@ -5,6 +5,10 @@ key presses for a long time count as idle, and after how long?", the user answer
 This follows the user's rule for Tiny Tapeout boards: a board is in use when someone is actively
 interacting with it, not when something was left on it.
 
+> Superseded in part (2026-11-27, "Use a consistent value of 5m as last activity"): there is
+> now one window for everything, `win`, 300 s by default and set by `last_activity` in
+> `config.toml` (see the 2026-11-25 spec and the README). The 900 s below is history.
+
 ## Today (`src/fpgas_online_mcp/data/in_use.sh`, the same block in `skills/fpgas-online/references/in-use.md`)
 
 - A tmux client counts as in use when its last key press (`#{client_activity}`) is less than

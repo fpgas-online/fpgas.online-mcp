@@ -9,7 +9,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
-from . import __version__, config
+from . import __version__
 from .client import BrokerClient, BrokerError, connect, ignored_option, version_tuple
 from .fleet import SECTIONS
 from .protocol import PROTOCOL
@@ -364,7 +364,7 @@ async def _broker_cmd(args: argparse.Namespace) -> tuple[Any, str | None, int]:
             text = f"running: version {info['version']}, pid {info['pid']}, started {when_epoch(info['started'])}"
             la = info.get("last_activity_s")
             if isinstance(la, int):
-                text += f"\nlast activity window: {la} s (last_activity in {config.path()})"
+                text += f"\nlast activity window: {la} s (last_activity in {info.get('config_file') or 'config.toml'})"
             elif la is not None:
                 text += f"\nlast activity window: config error, every in-use check says unknown: {la}"
             if info.get("protocol", 1) != PROTOCOL:
