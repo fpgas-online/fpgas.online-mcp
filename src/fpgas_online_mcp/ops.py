@@ -642,7 +642,18 @@ def _not_offered_error(board: Board, claim: Claim, e: Exception) -> BrokerError 
 async def _gate(state: State, board: Board, claim: Claim) -> None:
     """Before any ssh for a claimed board (connect, run, power_cycle): a welland Pi the site does not
     offer needs the claim's allow_unoffered, decided from the inventory (a master left open by another
-    claim must not let this one in). A Pi with a Tiny Tapeout board points to that board."""
+    claim must not let this one in). A Pi with a Tiny Tapeout board points to that board. A claim
+    with allow_unoffered is checked again: the Pi may since have gone missing or onto the setup port."""
+    if claim.allow_unoffered and board.site == "welland" and unoffered_refusal(board) is not None:
+        if board.setup_port:
+            now = "on the setup port"
+        elif board.condition == "missing":
+            now = "missing (not checking in)"
+        else:
+            now = f"in condition {board.condition}"
+        raise BrokerError(
+            "unoffered_not_covered", f"{board.id} is now {now}: allow_unoffered no longer covers it; release the claim"
+        )
     if not needs_option(board, claim.allow_unoffered):
         return
     if carries_tt(board):

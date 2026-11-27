@@ -400,3 +400,19 @@ async def test_cli_status_and_claim_with_the_option(stack, capsys):  # noqa: F81
     assert code == 0 and "(allow_unoffered)" in out
     code, out, err = await cli(capsys, "claim", MISSING, "--purpose", "look", "--allow-unoffered")
     assert code == 1 and "is missing (not checking in)" in err
+
+
+# --- a claim's allow_unoffered is checked again at use ------------------------------------------
+
+
+@pytest.mark.parametrize("op", ["connect", "run", "power_cycle"])
+@pytest.mark.parametrize(("board", "now"), [(SETUP, "on the setup port"), (MISSING, "missing (not checking in)")])
+async def test_a_claim_whose_pi_is_no_longer_covered_is_refused(stack, op, board, now):  # noqa: F811
+    setup_port(stack)
+    claim_id = await seed_claim(stack, board, allow_unoffered=True)  # taken while the Pi was up
+    args = {"command": "true"} if op == "run" else {}
+    async with broker() as c:
+        e = await refused(c, op, board=board, claim_id=claim_id, **args)
+    assert e.code == "unoffered_not_covered"
+    assert e.message == f"{board} is now {now}: allow_unoffered no longer covers it; release the claim"
+    assert stack.power.calls == [] and ssh_calls() == 0 and password_reads(stack) == 0
