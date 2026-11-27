@@ -398,12 +398,13 @@ def switch_ports(
         used = [{k: s.get(k) for k in SWITCH_KEYS} for s in chosen]
     rest = rows[offset:]
     asked = len(rest) if limit is None else min(limit, len(rest))
+    level = 0  # how far the switch summaries are shortened (_summaries)
 
     def build(n: int) -> dict:
         result = {
             "site": "welland",
             **(head or {}),
-            "switches": used,
+            "switches": _summaries(used, level),
             "columns": PORT_COLUMNS,
             "ports": rest[:n],
             "total": len(rows),
@@ -416,8 +417,16 @@ def switch_ports(
                 f"{n} of {len(rest)} ports shown to fit {LIMIT // 1024} KB; for more call switch_ports again with "
                 f"offset={offset + n}, or filter by switch, port, board or problems"
             )
+        if level:
+            result["note"] = (
+                "the switches' known issues are shortened to fit; switch_ports with switch=<index> and port=<n> "
+                "has room for them, and https://welland.fpgas.online/management/switches/ shows them"
+            )
         return result
 
+    # The summaries alone must leave room for at least one port (else `more` would repeat this offset).
+    while level < len(_SUMMARY_LEVELS) - 1 and _size(build(min(1, asked))) > LIMIT:
+        level += 1
     lo, hi = 0, asked
     while lo < hi:
         mid = (lo + hi + 1) // 2
@@ -425,4 +434,24 @@ def switch_ports(
             lo = mid
         else:
             hi = mid - 1
-    return build(lo)
+    return build(max(lo, min(1, asked)))  # never 0 of a non-empty page: the front end's backstop cuts text
+
+
+_SUMMARY_LEVELS = ("full", "issue links", "issue count", "index and name")
+
+
+def _summaries(used: list[dict], level: int) -> list[dict]:
+    """The switch summaries, shortened: known_issues to issue/url, then to a count, then index and name only."""
+    if level == 0:
+        return used
+    if level == 3:
+        return [{"index": s.get("index"), "name": s.get("name")} for s in used]
+    out = []
+    for s in used:
+        issues = s.get("known_issues") or []
+        if level == 1:
+            short = [{"issue": i.get("issue"), "url": i.get("url")} if isinstance(i, dict) else i for i in issues]
+        else:
+            short = len(issues)
+        out.append({**s, "known_issues": short})
+    return out

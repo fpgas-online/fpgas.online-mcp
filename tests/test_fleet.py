@@ -339,3 +339,38 @@ def test_a_huge_label_note_is_cut_not_dropped():
     assert size(r) <= fleet.LIMIT and "machine" in r
     note = r["labels"]["notes"][0]
     assert note.startswith("xxx") and note.endswith(MARK) and "labels" in r["cut"]
+
+
+def bloated_switches(n_issues, text_len):
+    data = switches()
+    for s in data:
+        s["known_issues"] = [
+            {"text": "t" * text_len, "issue": f"poe #{i}", "url": f"https://github.com/x/y/issues/{i}"}
+            for i in range(n_issues)
+        ]
+    return data
+
+
+def test_switch_ports_shortens_known_issues_to_show_a_port(monkeypatch):
+    monkeypatch.setattr(fleet, "LIMIT", 2500)
+    r = fleet.switch_ports(bloated_switches(4, 400), HOSTNAMES)
+    assert size(r) <= 2500 and len(r["ports"]) >= 1 and r["next"] == len(r["ports"])
+    assert r["switches"][0]["known_issues"][0] == {"issue": "poe #0", "url": "https://github.com/x/y/issues/0"}
+    assert "known issues" in r["note"]
+    assert f"offset={r['next']}" in r["more"] and "offset=0" not in r["more"]
+
+
+def test_switch_ports_counts_known_issues_when_even_links_do_not_fit(monkeypatch):
+    monkeypatch.setattr(fleet, "LIMIT", 2500)
+    r = fleet.switch_ports(bloated_switches(40, 10), HOSTNAMES, offset=3)
+    assert size(r) <= 2500 and len(r["ports"]) >= 1 and r.get("next", r["total"]) == 3 + len(r["ports"])
+    assert r["switches"][0]["known_issues"] == 40
+    assert "offset=3" not in r.get("more", "")
+
+
+def test_switch_ports_never_repeats_the_offset(monkeypatch):
+    for limit in (1200, 1600, 2000, 3000):
+        monkeypatch.setattr(fleet, "LIMIT", limit)
+        r = fleet.switch_ports(bloated_switches(40, 400), HOSTNAMES, offset=2)
+        assert r["ports"], limit
+        assert r.get("next", 8) > 2
