@@ -380,3 +380,56 @@ async def test_listed_pi_with_via_still_reads_its_own_page(env):
     with pytest.raises(PortMismatch):
         await mgr.ensure_master(BoardId("welland", "pi-sw2-p33"), via=BoardId("tinytapeout", "fpga-1"))
     assert sites.site_password_calls == 0
+
+
+# --- allow_unoffered: a welland Pi the site does not offer (its page is a 404) ------------------
+
+UNOFFERED = BoardId("welland", "pi-sw2-p38")
+
+
+async def test_unoffered_pi_with_the_option_uses_the_site_password(env, caplog):
+    caplog.set_level(logging.DEBUG)
+    mgr, sites, cfg, log = env
+    sites.missing["pi-sw2-p38"] = 404
+    info = await mgr.ensure_master(UNOFFERED, allow_unoffered=True)
+    assert info.alias == "fpgas-welland-pi-sw2-p38" and sites.site_password_calls == 1
+    text = (cfg / "ssh_config").read_text()
+    assert "Port 23822" in text and SECRET not in text  # the port comes from the name
+    r = await mgr.run(UNOFFERED, "echo up", 10, allow_unoffered=True)
+    assert r.exit_status == 0 and r.output == "up\n"
+    assert SECRET not in log.read_text() + caplog.text + repr(info) + repr(r)
+
+
+async def test_unoffered_pi_without_the_option_stays_refused(env):
+    mgr, sites, cfg, log = env
+    sites.missing["pi-sw2-p38"] = 404
+    for call in (mgr.ensure_master(UNOFFERED), mgr.run(UNOFFERED, "true", 5)):
+        with pytest.raises(SiteError, match="404"):
+            await call
+    assert sites.site_password_calls == 0 and not any("-MNf" in e["argv"] for e in entries(log))
+
+
+@pytest.mark.parametrize("status", [500, 403, None])
+async def test_the_option_does_not_cover_other_page_errors(env, status):
+    mgr, sites, cfg, log = env
+    sites.missing["pi-sw2-p38"] = status
+    with pytest.raises(SiteError):
+        await mgr.ensure_master(UNOFFERED, allow_unoffered=True)
+    assert sites.site_password_calls == 0
+
+
+async def test_the_option_still_reads_an_offered_pis_own_page(env):
+    mgr, sites, cfg, log = env
+    sites.port = 10322  # its own page disagrees with its name: refused, option or not
+    with pytest.raises(PortMismatch):
+        await mgr.ensure_master(UNOFFERED, allow_unoffered=True)
+    assert sites.site_password_calls == 0
+
+
+async def test_the_option_keeps_the_password_masked_in_errors(env, monkeypatch):
+    mgr, sites, cfg, log = env
+    sites.missing["pi-sw2-p38"] = 404
+    monkeypatch.setenv("FAKE_SSH_FAIL_START", f"Permission denied ({SECRET})")
+    with pytest.raises(RuntimeError) as exc:
+        await mgr.ensure_master(UNOFFERED, allow_unoffered=True)
+    assert SECRET not in str(exc.value) and "***" in str(exc.value)
