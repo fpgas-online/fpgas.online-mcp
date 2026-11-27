@@ -19,7 +19,16 @@ from datetime import UTC, datetime
 from importlib import resources
 from typing import Literal
 
-from .boards import Board, BoardId, carries_tt, not_offered, tt_board_with_serial, tt_host, tt_serials_on
+from .boards import (
+    Board,
+    BoardId,
+    carries_tt,
+    needs_option,
+    not_offered,
+    tt_board_with_serial,
+    tt_host,
+    tt_serials_on,
+)
 from .claims import Claim
 from .sites import SiteError
 from .ssh import defuse
@@ -177,6 +186,11 @@ def _live_claim(board: Board, claim: Claim | None, now: Callable[[], datetime]) 
     return None, [f"claim {claim.claim_id} is not a live claim on this board; nothing discounted"]
 
 
+def not_offered_verdict(board: Board) -> Verdict:
+    """`unknown` for a welland Pi the site does not offer, checked without allow_unoffered (no ssh)."""
+    return replace(_verdict("unknown", [not_offered(board)]), not_offered=True)
+
+
 def _failed(exc: Exception) -> Verdict:
     return _verdict("unknown", [f"the check failed: {type(exc).__name__}: {exc}"])
 
@@ -216,7 +230,7 @@ async def _check_ssh(
         except SiteError as e:
             if e.status != 404 or board.site != "welland" or allow_unoffered:
                 raise
-            return replace(_verdict("unknown", [not_offered(board)]), not_offered=True)
+            return not_offered_verdict(board)
     else:
         result = await ssh.run(host, command, SCRIPT_TIMEOUT_S, via=board.id)
     if result.timed_out:
@@ -381,6 +395,8 @@ async def check(
     `allow_unoffered` lets the script reach a welland Pi the site does not offer (the caller decides
     that the option applies); a Tiny Tapeout board ignores it (it reaches its Pi through `via`)."""
     try:
+        if needs_option(board, allow_unoffered):  # from the inventory: never reuse another claim's master
+            return not_offered_verdict(board)
         if board.site == "tinytapeout":
             return await _check_tt_board(board, ssh, sites, claim, clock, sleep, now)
         if carries_tt(board):

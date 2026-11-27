@@ -573,7 +573,7 @@ async def test_tinytapeout_board_and_its_pi_exclude_each_other(stack):
         assert f"{TT_CHIP} is claimed by me:1@host" in text and f"same Pi ({TT_PI})" in text
         assert len(stack.inuse.calls) == checks  # refused before the slow in-use check
         ok(await call(me, "release_board", claim_id=claim["claim_id"]))
-        ok(await call(you, "claim_board", board=TT_PI, purpose="blink"))
+        ok(await call(you, "claim_board", board=TT_PI, purpose="blink", allow_unoffered=True))  # not offered
         text = err(await call(me, "claim_board", board=TT_CHIP, purpose="chip test"))
         assert f"{TT_PI} is claimed by you:2@host" in text
 
@@ -821,9 +821,11 @@ async def test_tinytapeout_claim_with_an_unreadable_board_page_is_refused(stack)
 
 async def test_ssh_to_a_pi_welland_does_not_list_points_to_its_tinytapeout_board(stack):
     async with stack.session() as c:
-        ok(await call(c, "claim_board", board=TT_PI, purpose="x"))  # carries TT_CHIP; its page is a 404
+        text = err(await call(c, "claim_board", board=TT_PI, purpose="x"))  # carries TT_CHIP; not offered
+        assert "not claimed" in text and f"claim and connect {TT_CHIP} instead" in text
+        old = await stack.state.claims.claim(TT_PI, 30, "old", "me:1@host")  # as an older broker could leave it
         for name, args in (("connect", {}), ("run", {"command": "true"})):
-            text = err(await call(c, name, board=TT_PI, **args))
+            text = err(await call(c, name, board=TT_PI, claim_id=old.claim_id, **args))
             assert f"this Pi is reached through its Tiny Tapeout board: claim and connect {TT_CHIP} instead" in text
 
 
@@ -835,7 +837,7 @@ async def test_ssh_to_such_a_pi_without_a_listed_board_points_to_list_boards(sta
                 b["id"] = "ffffffffffffffff"
     stack.site.override[("welland.fpgas.online", "/fleet/registry.json")] = httpx.Response(200, json=registry)
     async with stack.session() as c:
-        ok(await call(c, "claim_board", board=TT_PI, purpose="x"))
-        text = err(await call(c, "connect", board=TT_PI))
+        old = await stack.state.claims.claim(TT_PI, 30, "old", "me:1@host")
+        text = err(await call(c, "connect", board=TT_PI, claim_id=old.claim_id))
         assert "this Pi is reached through its Tiny Tapeout board" in text and "list_boards" in text
         assert "site tinytapeout" in text

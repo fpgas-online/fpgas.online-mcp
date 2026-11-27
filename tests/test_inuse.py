@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -590,8 +591,17 @@ async def test_the_option_reaches_the_ssh_run():
     ssh = FakeSsh(script_out("idle"))
     v = await inuse.check(UNOFFERED, ssh, None, None, now=lambda: NOW, allow_unoffered=True)
     assert v.verdict == "idle" and ssh.allow_unoffered is True and ssh.via is None
-    await inuse.check(UNOFFERED, ssh, None, None, now=lambda: NOW)
+    await inuse.check(board(), ssh, None, None, now=lambda: NOW)
     assert ssh.allow_unoffered is False  # off unless asked for
+
+
+async def test_an_unoffered_pi_without_the_option_is_never_reached_over_ssh():
+    ssh = FakeSsh(script_out("idle"))  # a master left open by another claim would answer like this
+    v = await inuse.check(UNOFFERED, ssh, None, None, now=lambda: NOW)
+    assert v.verdict == "unknown" and v.not_offered is True and ssh.calls == []
+    v = await inuse.check(replace(UNOFFERED, condition="missing"), ssh, None, None, now=lambda: NOW,
+                          allow_unoffered=False)  # fmt: skip
+    assert v.not_offered is True and "will not help" in v.signals[0] and ssh.calls == []
 
 
 async def test_an_unoffered_pi_without_the_option_says_how_to_reach_it():
@@ -604,8 +614,9 @@ async def test_an_unoffered_pi_without_the_option_says_how_to_reach_it():
 
 
 async def test_other_failures_are_not_called_not_offered():
+    offered = replace(UNOFFERED, offered=True)  # listed in the registry as offered, its page fails
     for exc in (SiteError("welland: HTTP 500 for /fpgas/pi-sw2-p38.html", status=500), OSError("boom")):
-        v = await inuse.check(UNOFFERED, FakeSsh(exc=exc), None, None, now=lambda: NOW)
+        v = await inuse.check(offered, FakeSsh(exc=exc), None, None, now=lambda: NOW)
         assert v.verdict == "unknown" and v.not_offered is False
     v = await inuse.check(UNOFFERED, FakeSsh(exc=NOT_LISTED), None, None, now=lambda: NOW, allow_unoffered=True)
     assert v.verdict == "unknown" and v.not_offered is False  # the option was on: a plain failure

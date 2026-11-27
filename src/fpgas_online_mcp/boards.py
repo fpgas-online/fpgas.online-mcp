@@ -314,6 +314,15 @@ def unoffered_refusal(board: Board) -> str | None:
     return f"{board.id} is {state}: allow_unoffered reaches only a Pi that is up (condition operational or attention)"
 
 
+def needs_option(board: Board, allow_unoffered: bool) -> bool:
+    """A welland Pi the site does not offer, reached without allow_unoffered: nothing may ssh to it.
+
+    Decided from the inventory, never from ssh: a master another claim left open must not let a
+    claim without the option in. (A Tiny Tapeout board's Pi is reached through the board, whose site
+    is tinytapeout, so this never applies to it.)"""
+    return board.site == "welland" and board.offered is not True and not allow_unoffered
+
+
 def not_offered(board: Board) -> str:
     """What to say when the page of a welland Pi is a 404 (the site does not offer it) and the option is off."""
     head = f"welland does not offer {board.id} (condition {board.condition}); "

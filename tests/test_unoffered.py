@@ -7,13 +7,16 @@ page (HTTP 404), like a real Pi welland does not offer.
 
 import contextlib
 import json
+import os
+from pathlib import Path
 
 import httpx
 import pytest
 from test_broker import env  # noqa: F401  (fixture)
 from test_mcp import HERE, call, ok, stack  # noqa: F401  (fixture)
 
-from fpgas_online_mcp import client, mcp_server, paths
+from fpgas_online_mcp import client, inuse, mcp_server, paths
+from fpgas_online_mcp.boards import BoardId
 from fpgas_online_mcp.client import BrokerError
 from fpgas_online_mcp.inuse import Verdict
 
@@ -61,7 +64,6 @@ def password_reads(stack):  # noqa: F811
 
 
 async def test_without_the_option_an_unoffered_pi_is_refused_and_told_about_the_option(stack):  # noqa: F811
-    stack.inuse.verdict = Verdict("unknown", [HINT], "x", not_offered=True)
     async with broker() as c:
         e = await refused(c, "claim_board", board=UNOFFERED, purpose="look")
         assert e.code == "not_offered" and HINT in e.message and "not claimed" in e.message
@@ -69,18 +71,24 @@ async def test_without_the_option_an_unoffered_pi_is_refused_and_told_about_the_
         e = await refused(c, "claim_board", board=UNOFFERED, purpose="look", override_reason="Tim said so")
         assert e.code == "not_offered"
     assert stack.state.claims.for_board(UNOFFERED) is None
-    assert stack.inuse.kw[-1]["allow_unoffered"] is False
+    assert stack.inuse.calls == []  # refused from the inventory, before any ssh
+
+
+async def seed_claim(stack, board, allow_unoffered=False):  # noqa: F811
+    """A claim as an older broker (or an earlier state of the site) could have left it."""
+    claim = await stack.state.claims.claim(board, 30, "old", "me:1@host", allow_unoffered=allow_unoffered)
+    return claim.claim_id
 
 
 async def test_a_claim_without_the_option_cannot_reach_the_pi(stack):  # noqa: F811
+    claim_id = await seed_claim(stack, UNOFFERED)
     async with broker() as c:
-        await c.call("claim_board", board=UNOFFERED, purpose="look")  # the stub check says idle
-        for op, args in (("connect", {}), ("run", {"command": "true"})):
+        for op, args in (("connect", {}), ("run", {"command": "true"}), ("power_cycle", {})):
             # the option is the claim's: passing it here changes nothing
-            e = await refused(c, op, board=UNOFFERED, allow_unoffered=True, **args)
+            e = await refused(c, op, board=UNOFFERED, claim_id=claim_id, allow_unoffered=True, **args)
             assert e.code == "not_offered" and HINT in e.message
             assert "claim the board again with allow_unoffered" in e.message
-    assert password_reads(stack) == 0
+    assert password_reads(stack) == 0 and stack.power.calls == []
     assert "Host fpgas-welland-pi-sw1-p10" not in _config()
 
 
@@ -89,12 +97,38 @@ def _config() -> str:
     return path.read_text() if path.exists() else ""
 
 
+def ssh_calls() -> int:
+    log = Path(os.environ["FAKE_SSH_LOG"])
+    return len(log.read_text().splitlines()) if log.exists() else 0
+
+
 async def test_board_status_without_the_option_says_how_to_reach_the_pi(stack):  # noqa: F811
-    stack.inuse.verdict = Verdict("unknown", [HINT], "x", not_offered=True)
     async with broker() as c:
         status = await c.call("board_status", board=UNOFFERED)
     assert status["not_offered"] == HINT and "offered_note" not in status
-    assert status["in_use"]["verdict"] == "unknown" and stack.inuse.kw[-1]["allow_unoffered"] is False
+    assert status["in_use"]["verdict"] == "unknown" and HINT in status["in_use"]["signals"][0]
+    assert stack.inuse.calls == [] and ssh_calls() == 0
+
+
+async def test_a_leftover_master_does_not_let_a_claim_without_the_option_in(stack):  # noqa: F811
+    async with broker() as c:
+        claim = await c.call("claim_board", board=UNOFFERED, purpose="look", allow_unoffered=True)
+        await c.call("connect", board=UNOFFERED)  # opens the shared master (it persists for 30 minutes)
+        await c.call("release_board", claim_id=claim["claim_id"])
+    assert await stack.state.ssh.check(BoardId("welland", "pi-sw1-p10"))
+    stack.state.inuse_check = inuse.check  # the real check: it would reuse that master if asked
+    before = ssh_calls()
+    async with broker("other:2@host") as other:
+        e = await refused(other, "claim_board", board=UNOFFERED, purpose="sneak")
+        assert e.code == "not_offered" and HINT in e.message
+        status = await other.call("board_status", board=UNOFFERED)
+        assert status["in_use"]["verdict"] == "unknown" and status["not_offered"] == HINT
+        claim_id = await seed_claim(stack, UNOFFERED)
+        for op, args in (("connect", {}), ("run", {"command": "true"}), ("power_cycle", {})):
+            e = await refused(other, op, board=UNOFFERED, claim_id=claim_id, **args)
+            assert e.code == "not_offered"
+    assert ssh_calls() == before and stack.state.claims.for_board(UNOFFERED).allow_unoffered is False
+    assert stack.power.calls == []
 
 
 # --- with the option -----------------------------------------------------------------------------
@@ -180,10 +214,13 @@ async def test_a_missing_or_setup_port_pi_is_told_the_option_will_not_help(stack
     setup_port(stack)
     async with broker() as c:
         for board, why in ((MISSING, "not checking in"), (SETUP, "setup port")):
-            await c.call("claim_board", board=board, purpose="x", override_reason="test")
-            e = await refused(c, "connect", board=board)
+            e = await refused(c, "claim_board", board=board, purpose="x", override_reason="test")
+            assert e.code == "not_offered" and "allow_unoffered will not help" in e.message and why in e.message
+            claim_id = await seed_claim(stack, board)
+            e = await refused(c, "connect", board=board, claim_id=claim_id)
             assert e.code == "not_offered" and "allow_unoffered will not help" in e.message and why in e.message
             assert "claim the board again" not in e.message
+    assert stack.inuse.calls == [] and ssh_calls() == 0
 
 
 # --- renewals and arguments ----------------------------------------------------------------------
@@ -257,7 +294,7 @@ async def test_board_status_cuts_the_tests_first_and_never_the_verdict(stack):  
     huge_registry(stack, boards=4, tests=25)
     stack.inuse.verdict = long_verdict()
     async with stack.session() as c:
-        status = ok(await call(c, "board_status", board=UNOFFERED))  # asserts it fits in 4 KB
+        status = ok(await call(c, "board_status", board=UNOFFERED, allow_unoffered=True))  # fits in 4 KB
     assert status["in_use"]["verdict"] == "in use"
     assert all(f"signal {i} " in status["in_use"]["signals"][0] for i in range(10))
     assert [b["type"] for b in status["board"]["boards"]] == [f"Board type {i}" for i in range(4)]
@@ -269,7 +306,7 @@ async def test_board_status_drops_the_boards_when_even_that_is_too_long(stack): 
     huge_registry(stack, boards=60, tests=3)
     stack.inuse.verdict = long_verdict()
     async with stack.session() as c:
-        status = ok(await call(c, "board_status", board=UNOFFERED))
+        status = ok(await call(c, "board_status", board=UNOFFERED, allow_unoffered=True))
     assert "boards" not in status["board"] and "fleet_page" in status["board"]["cut"]
     assert status["in_use"]["verdict"] == "in use" and status["board"]["switch_port"]["watts"] == 8.7
 

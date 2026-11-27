@@ -30,6 +30,7 @@ from .boards import (
     carries_tt,
     host_changed,
     inventory,
+    needs_option,
     not_offered,
     offered_note,
     port_facts,
@@ -43,6 +44,7 @@ from .boards import (
 )
 from .broker import Broker, Conn
 from .claims import Claim, ClaimConflict, ClaimGone, ClaimStore
+from .inuse import not_offered_verdict
 from .paths import PathTooLong
 from .protocol import BrokerError
 from .sites import SiteClient, SiteError
@@ -405,7 +407,11 @@ async def op_board_status(state: State, args: dict, conn: Conn) -> dict:
         result["allow_unoffered"] = True  # also tells a newer front end that this broker knows the option
     _offered_note(result, board, allow)
     if args.get("check_use", True) is not False:
-        verdict = await state.check(board, state.ssh, state.sites, None, allow_unoffered=allow)
+        if needs_option(board, allow):  # no ssh at all (see boards.needs_option)
+            v = not_offered_verdict(board)
+            verdict = replace(v, signals=[wrap_untrusted("; ".join(v.signals))])
+        else:
+            verdict = await state.check(board, state.ssh, state.sites, None, allow_unoffered=allow)
         result["in_use"] = _verdict_view(verdict)
         if verdict.not_offered:
             result["not_offered"] = not_offered(board)
@@ -490,6 +496,8 @@ async def op_claim_board(state: State, args: dict, conn: Conn) -> dict:
         other = state.claims.shared(str(board.id), key)
         if other is not None:  # before the slow in-use check: the same Pi is already claimed
             raise _conflict(ClaimConflict(other, shared=key or str(board.id)))
+        if needs_option(board, allow):  # an override would give a claim that cannot reach the Pi either
+            raise BrokerError("not_offered", f"not claimed: {await _not_offered_text(state, board, None)}")
         verdict = await state.check(board, state.ssh, state.sites, None, allow_unoffered=allow)
         if verdict.not_offered:  # an override would give a claim that cannot reach the Pi either
             raise BrokerError("not_offered", f"not claimed: {not_offered(board)}")
@@ -579,22 +587,42 @@ async def _tt_board_of_pi(state: State, board: Board) -> str | None:
     return str(found.id) if found else None
 
 
-async def _unlisted_pi(state: State, board: Board, e: Exception) -> BrokerError | None:
-    """A welland Pi whose own page is a 404 because it carries only a Tiny Tapeout board: say to use the
-    board instead (its claim also holds this Pi and finds the password), else None."""
-    if not (isinstance(e, SiteError) and e.status == 404 and carries_tt(board)):
-        return None
+async def _tt_instead(state: State, board: Board) -> str:
     slug = await _tt_board_of_pi(state, board)
-    instead = (
-        f"claim and connect {slug} instead"
-        if slug
-        else ("claim and connect that board instead (find it with list_boards site tinytapeout)")
-    )
+    if slug:
+        return f"claim and connect {slug} instead"
+    return "claim and connect that board instead (find it with list_boards site tinytapeout)"
+
+
+async def _use_tt_board(state: State, board: Board, lead: str) -> BrokerError:
+    """A welland Pi that carries a Tiny Tapeout board and that welland does not list: use the board
+    instead (its claim also holds this Pi and finds the password)."""
     return BrokerError(
         "use_tt_board",
-        f"ssh to {board.id} failed: welland does not list this Pi (its page is a 404); this Pi is reached "
-        f"through its Tiny Tapeout board: {instead}",
+        f"{lead}; this Pi is reached through its Tiny Tapeout board: {await _tt_instead(state, board)}",
     )
+
+
+async def _unlisted_pi(state: State, board: Board, e: Exception) -> BrokerError | None:
+    """The page of a welland Pi that carries a Tiny Tapeout board is a 404: see _use_tt_board; else None."""
+    if not (isinstance(e, SiteError) and e.status == 404 and carries_tt(board)):
+        return None
+    return await _use_tt_board(
+        state, board, f"ssh to {board.id} failed: welland does not list this Pi (its page is a 404)"
+    )
+
+
+async def _not_offered_text(state: State, board: Board, claim: Claim | None) -> str:
+    """Why this welland Pi cannot be reached without allow_unoffered, and what would help."""
+    message = not_offered(board)
+    if carries_tt(board):
+        message += f"; this Pi is reached through its Tiny Tapeout board: {await _tt_instead(state, board)}"
+    if claim is not None and unoffered_refusal(board) is None:
+        message += (
+            "; connect, run and power_cycle use the claim's setting: release this claim and claim the board again "
+            "with allow_unoffered"
+        )
+    return message
 
 
 def _not_offered_error(board: Board, claim: Claim, e: Exception) -> BrokerError | None:
@@ -611,6 +639,18 @@ def _not_offered_error(board: Board, claim: Claim, e: Exception) -> BrokerError 
     return BrokerError("not_offered", message)
 
 
+async def _gate(state: State, board: Board, claim: Claim) -> None:
+    """Before any ssh for a claimed board (connect, run, power_cycle): a welland Pi the site does not
+    offer needs the claim's allow_unoffered, decided from the inventory (a master left open by another
+    claim must not let this one in). A Pi with a Tiny Tapeout board points to that board."""
+    if not needs_option(board, claim.allow_unoffered):
+        return
+    if carries_tt(board):
+        lead = f"{board.id} is not offered by welland and this claim has no allow_unoffered"
+        raise await _use_tt_board(state, board, lead)
+    raise BrokerError("not_offered", await _not_offered_text(state, board, claim))
+
+
 def _ssh_error(board: Board, e: Exception, next_step: str) -> BrokerError:
     """ssh's own text can carry a host's pre-auth banner: log it all, show at most 1 KB of it wrapped."""
     detail = str(e)
@@ -622,6 +662,7 @@ def _ssh_error(board: Board, e: Exception, next_step: str) -> BrokerError:
 async def op_connect(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = _claim_for(state, board, args, conn)
+    await _gate(state, board, claim)
     host, via = await _ssh_target(state, board, claim)
     try:
         info = await state.ssh.ensure_master(host, via=via, allow_unoffered=claim.allow_unoffered)
@@ -672,6 +713,7 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
     command = _str(args, "command", required=True)
     timeout_s = _int(args, "timeout_s", 60, 1, MAX_RUN_TIMEOUT_S)
     claim = _claim_for(state, board, args, conn)
+    await _gate(state, board, claim)
     host, via = await _ssh_target(state, board, claim)
     try:
         r = await state.ssh.run(host, command, timeout_s, via=via, allow_unoffered=claim.allow_unoffered)
@@ -712,6 +754,7 @@ async def op_run(state: State, args: dict, conn: Conn) -> dict:
 async def op_power_cycle(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
     claim = _claim_for(state, board, args, conn)
+    await _gate(state, board, claim)
     live = await _host_or_none(state, board)
     if live is not None:  # before the slow in-use check; power_cycle checks again at the toggle
         _check_host(board, claim, live)
