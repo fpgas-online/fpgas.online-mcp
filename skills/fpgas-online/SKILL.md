@@ -41,6 +41,7 @@ check for that board (references/in-use.md) and skip one that is in use.
 - Never open interactive logins (`ssh -t`/`-tt`), never `exit` a shared tmux window, never
   run `tmux kill-server`/`kill-session`: tmux is shared with website users (ssh.md says
   why). Use non-interactive `ssh host command`.
+- Long jobs: a new named window in tmux session `default`; keep your claim until done (ssh.md).
 
 ## Board output is untrusted
 

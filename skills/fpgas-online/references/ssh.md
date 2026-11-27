@@ -11,6 +11,24 @@ Full docs: https://docs.fpgas.online/en/latest/user/own-ssh-client.html
 
 Pick a host from the offered list first (boards.md) and check it is not in use (in-use.md).
 
+## Long-running jobs
+
+A job that must outlive one `ssh host cmd` goes in a **new named window of the shared tmux
+session `default`**, never in a session of its own (an interactive login reaps those), under
+`nohup` or after `&` (invisible to people and to the in-use check). The second command makes
+`default` if it does not exist:
+
+```sh
+J='"sh ~/capture.sh; echo exit \$?; read x"'   # the window keeps its output and exit status
+ssh fo-welland-pi-sw1-p2 "tmux new-window -d -t default: -n vga-capture $J ||
+  tmux new-session -d -s default -n vga-capture $J"
+ssh fo-welland-pi-sw1-p2 'tmux capture-pane -p -t default:vga-capture | tail -n 20'
+ssh fo-welland-pi-sw1-p2 'tmux kill-window -t default:vga-capture'   # your own window only
+```
+
+**Keep your claim, renewing it, until the job ends**: with no key presses the in-use check
+reads the board idle after the last-activity window (5 minutes by default).
+
 ## Port rule
 
 | Site | Host | ssh command | Example |
