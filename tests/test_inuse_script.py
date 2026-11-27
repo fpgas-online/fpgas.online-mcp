@@ -19,6 +19,9 @@ from fpgas_online_mcp import inuse
 
 AWKS = [a for a in ("mawk", "gawk", "busybox") if shutil.which(a)]
 
+# the fake `ps` walks /proc/<pid>/stat to print the script's own process chain
+pytestmark = pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs Linux /proc for the fake ps")
+
 # `ps -u ... -o pid=,ppid=,etimes=,args=`: the script finds its own login by walking up from `$$` to an
 # `sshd-session: pi@...` line, so the fake prints the real chain of the script's processes up to the
 # test process, which it calls the sshd of this login, then the extra lines of the case.
@@ -192,6 +195,50 @@ def test_window_in_two_sessions_counts_the_newest_key_press(scratch, awk):
     """A window linked into two sessions (a session group) is listed once per session."""
     out = run_script(scratch, awk, panes="100 {ago5000} minicom\n100 {ago20} minicom\n100 {ago4000} minicom\n")
     assert verdict_of(out) == "verdict: in use" and "), no key press" not in out, out
+
+
+# The idle rule is `now - session_activity >= 300`, matching the client rule (active under 300 s).
+@pytest.mark.parametrize(("age", "idle"), [(299, False), (300, True)])
+def test_window_300s_edge(scratch, awk, age, idle):
+    out = run_script(scratch, awk, panes=f"100 {{ago{age}}} minicom\n")
+    assert ("), no key press for 5 min: minicom" in out) == idle, out
+    assert verdict_of(out) == ("verdict: idle" if idle else "verdict: in use"), out
+
+
+@pytest.mark.parametrize("act", ["0", "-5"])
+def test_session_time_zero_or_negative_is_unknown_and_in_use(scratch, awk, act):
+    out = run_script(scratch, awk, panes=f"100 {act} minicom\n")
+    assert "  window pid 100 (minicom): minicom" in out and verdict_of(out) == "verdict: in use", out
+
+
+@pytest.mark.parametrize("panes", ["100 x minicom\n100 {ago5000} minicom\n", "100 {ago5000} minicom\n100 x minicom\n"])
+def test_window_in_two_sessions_with_an_unknown_time_is_in_use(scratch, awk, panes):
+    out = run_script(scratch, awk, panes=panes)
+    assert verdict_of(out) == "verdict: in use" and "), no key press" not in out, out
+
+
+# dash's `echo` reads backslash escapes and stops all output at `\c`: board text must go through printf
+@pytest.mark.parametrize(("busy", "odd"), [(100, 200), (200, 100), (7, 900), (900, 7)])
+def test_backslash_c_in_a_child_does_not_hide_a_busy_window(scratch, awk, busy, odd):
+    panes = f"{busy} {{ago20}} bash\n{odd} {{ago5000}} bash\n"
+    ps_a = f"{busy} make all\n{odd} printf a\\cb\n"
+    out = run_script(scratch, awk, panes=panes, ps_a=ps_a)
+    assert f"  window pid {busy} (bash): make all" in out, out
+    assert f"  window pid {odd} (bash), no key press for 83 min: printf a\\cb" in out, out
+    assert "active: a program running in a tmux window" in out and verdict_of(out) == "verdict: in use", out
+
+
+def test_backslash_c_in_a_session_name_does_not_hide_a_recent_client(scratch, awk):
+    out = run_script(scratch, awk, clients="{ago900} /dev/pts/1 a\\cb\n{ago20} /dev/pts/0 default-0\n")
+    assert "  /dev/pts/1 a\\cb idle 900 s" in out and "  /dev/pts/0 default-0 idle 20 s" in out, out
+    assert "active: tmux client, 20 s ago" in out and verdict_of(out) == "verdict: in use", out
+
+
+def test_backslash_c_in_another_login_command_is_shown_whole(scratch, awk):
+    other = "7000 1 900 sshd-session: pi@pts/3\n7001 7000 50 printf a\\cb\n7002 7000 40 sleep 99\n"
+    out = run_script(scratch, awk, ps_u=other)
+    assert "printf a\\cb" in out and "  pid 7002, running 40 s: sleep 99" in out, out
+    assert "active: 2 command(s) running for another login" in out, out
 
 
 def test_idle_program_does_not_hide_a_recent_client(scratch, awk):

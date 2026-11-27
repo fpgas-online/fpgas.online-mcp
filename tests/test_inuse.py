@@ -111,7 +111,7 @@ def test_script_matches_in_use_md():
 
 def test_remote_script_is_the_heredoc_body():
     s = inuse.remote_script()
-    assert s.startswith("now=$(date +%s)") and s.rstrip().endswith('echo "verdict: $verdict"')
+    assert s.startswith("now=$(date +%s)") and s.rstrip().endswith("printf 'verdict: %s\\n' \"$verdict\"")
     assert "<<'EOF'" not in s and "ssh " not in s.splitlines()[0]
 
 
@@ -121,7 +121,7 @@ async def test_ssh_command_and_idle():
     assert v.verdict == "idle" and v.signals == []
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", v.as_of)
     _, command, timeout = ssh.calls[0]
-    assert command.startswith("sh -c ") and "verdict: $verdict" in command and timeout == 30.0
+    assert command.startswith("sh -c ") and "verdict: %s" in command and timeout == 30.0
 
 
 async def test_in_use_lines():
