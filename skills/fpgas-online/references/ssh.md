@@ -31,6 +31,14 @@ name as above (`pi-sw2-p7` is port `20722`). A Pi whose only board is a chip boa
 listed by welland, so `/fpgas/pi-sw2-p7.html` is HTTP 404; the password is the same on every
 welland Pi, so the `welland.pw` read below from `pi-sw1-p2` works for it too.
 
+### A Pi welland does not offer
+
+Use one only when the user asks for it (boards.md, "Pis welland does not offer"). A Pi that
+is up (`condition` `operational` or `attention`) but not offered has no board page
+(`/fpgas/<hostname>.html` is HTTP 404); the port follows from its name as above
+(`pi-sw2-p38` is port `23822`) and the password is the same `welland.pw` as below. Any other
+error from the page (not a 404) means the site is not answering: do not guess, try later.
+
 ## Read the password from the board page
 
 The password is shared by every host on a site (it differs between welland and ps1) and is

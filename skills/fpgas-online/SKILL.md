@@ -25,7 +25,9 @@ using boards, not running the infrastructure. Everything below needs only `curl`
 | Other | `cameras` in the registry | board page | designs, bitstream upload and serial bridge (state-changing parts not yet exercised live) |
 
 Each welland and ps1 host has a page `/fpgas/<hostname>.html`; the ssh password is shared
-per site and published there (see ssh.md).
+per site and published there (see ssh.md). welland also runs Pis it does not offer (condition
+`attention`: up, but the boot check failed or found no board): use one only when the user
+asks (boards.md, "Pis welland does not offer").
 
 ## Sharing rules
 

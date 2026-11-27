@@ -62,7 +62,7 @@ verified), so expect only the HTTPS parts to work there.
 | --- | --- |
 | `guide` | The skill text: sites, sharing rules, topics |
 | `list_boards` | All boards of all sites, one dense row each (condition, last seen) plus local claims; filter by site, condition or type |
-| `board_status` | One board's facts (for a Tiny Tapeout board, the welland Pi it is plugged into) and the live in-use check (idle / in use / unknown) |
+| `board_status` | One board's facts (for a Tiny Tapeout board, the welland Pi it is plugged into; for a welland Pi, its boot check, boards, fleet page and switch port) and the live in-use check (idle / in use / unknown) |
 | `claim_board` | Claim a board (30 min default, 240 max); runs the in-use check first; renews with `claim_id`. A Tiny Tapeout board's claim holds the welland Pi it was on when claimed (no one can claim that Pi meanwhile); if the board moves, `connect`, `run` and `power_cycle` refuse until you claim it again |
 | `release_board` | Release a claim |
 | `connect` | Open the shared ssh connection (a Tiny Tapeout board's: to the welland Pi it is plugged into); returns the ssh/scp command lines |
@@ -71,6 +71,16 @@ verified), so expect only the HTTPS parts to work there.
 
 `connect`, `run` and `power_cycle` need your claim. Unknown in-use state counts
 as in use.
+
+welland offers a Pi (lists it on `/fpgas/`, with a board page) only when its boot
+check passed. A Pi that is up but not offered (condition `attention`) still takes
+ssh; `board_status` and `claim_board` reach one with `allow_unoffered`, which an
+agent should pass only when the user asks for it (the Pi may be under
+maintenance). The claim keeps the setting for `connect`, `run` and `power_cycle`
+and shows it to everyone; the results carry an `offered_note`. It is refused for
+a `missing` Pi, one on the setup port, and ps1 and Tiny Tapeout boards. Why a Pi
+is not offered is on its fleet page, `https://welland.fpgas.online/fleet/<serial>/`
+(`board_status` gives the link).
 
 Tool-call timeout: Claude Code's default for MCP tool calls is about 28 hours
 (`MCP_TOOL_TIMEOUT`, milliseconds; a per-server `timeout` field in `.mcp.json`
@@ -84,9 +94,9 @@ and for agents without MCP:
 
 ```
 fpgas-online boards [--site SITE] [--condition CONDITION]
-fpgas-online status BOARD
+fpgas-online status BOARD [--allow-unoffered]
 fpgas-online claims
-fpgas-online claim BOARD --purpose TEXT [--minutes N] [--override-reason TEXT]
+fpgas-online claim BOARD --purpose TEXT [--minutes N] [--override-reason TEXT] [--allow-unoffered]
 fpgas-online release CLAIM_ID
 fpgas-online broker status|stop
 ```
@@ -124,7 +134,9 @@ A claim file looks like:
   "started": "2026-11-26T12:00:00Z",
   "expires": "2026-11-26T12:30:00Z",
   "override_reason": null,
-  "tt_state_at_claim": null
+  "tt_state_at_claim": null,
+  "host": null,
+  "allow_unoffered": false
 }
 ```
 
