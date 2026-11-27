@@ -27,7 +27,10 @@ SECTIONS = (
 DEFAULT_SECTIONS = ("machine", "boards", "network", "switch_port")
 # list sections: paged, newest first by this key (None: in the site's order)
 PAGED = {"boards": None, "boot_checks": None, "registrations": "last_confirmed", "events": "ts", "console": "at"}
-UNTRUSTED = {"registrations", "events", "console"}  # text the Pi sent
+# Sections that are text the Pi sent (anyone can log in to a Pi and plant text): each is wrapped once.
+UNTRUSTED = {"boards", "boot_checks", "registrations", "events", "console"}
+UNTRUSTED_MACHINE = ("registered_model", "cameras")  # machine fields the Pi reports about itself
+UNTRUSTED_PORT = ("lldp_name", "lldp_port")  # what the device on a switch port announces
 FALLBACK_UNAVAILABLE = ("boot_checks", "labels", "registrations", "events", "console")
 PORT_COLUMNS = [
     "switch",
@@ -93,6 +96,8 @@ def port_view(row: dict, names: dict[str, str], switch: int | None = None) -> di
         value = row[key]
         if key == "machines":
             value = [names.get(m.get("serial"), m.get("serial")) if isinstance(m, dict) else m for m in value or []]
+        elif key in UNTRUSTED_PORT and value not in (None, ""):
+            value = wrap_untrusted(value if isinstance(value, str) else _compact(value))
         view[key] = value
     return view
 
@@ -169,7 +174,14 @@ def _newest_first(items: list, key: str | None) -> list:
 def _section(name: str, data: dict, names: dict[str, str], offset: int, limit: int) -> _Section:
     value = data.get(name)
     extra = None
-    if name == "network" and value is None and data.get("network_error"):
+    if name == "machine" and isinstance(value, dict):
+        value = {
+            k: wrap_untrusted(v if isinstance(v, str) else _compact(v))
+            if k in UNTRUSTED_MACHINE and v is not None
+            else v
+            for k, v in value.items()
+        }
+    elif name == "network" and value is None and data.get("network_error"):
         value = {"error": data["network_error"]}
     elif name == "switch_port" and isinstance(value, dict):
         value = port_view(value, names, data.get("switch_index"))

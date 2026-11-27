@@ -902,7 +902,7 @@ async def test_fleet_details_falls_back_when_the_site_has_no_machine_json(stack)
         details = ok(result, 8192)
     no_actions(text_of(result, 8192))
     assert "newer site" in details["note"] and details["page"] in details["note"]
-    assert details["machine"]["hostname"] == "pi-sw1-p2" and details["boards"][0]["type"] == "Fomu"
+    assert details["machine"]["hostname"] == "pi-sw1-p2" and '"type":"Fomu"' in details["boards"]
     assert details["switch_port"]["switch"] == 1 and details["switch_port"]["port"] == 2
     assert set(details["unavailable"]) == {"boot_checks", "labels", "registrations", "events", "console"}
 
