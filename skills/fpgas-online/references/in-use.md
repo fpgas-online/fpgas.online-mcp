@@ -307,15 +307,17 @@ slug with no board `{"reachable":false,"clients":null,"idle":null}` (the respons
   Still `waiting` after two such re-reads means the board keeps being used: treat it as in
   use and ask the user.
   `in use` means a serial client is connected or a load is running. `left: <design>` means a
-  design somebody loaded is still there and will not be replaced: they may be done or about
-  to come back; treat it as in use and ask the user. `left: the SDK is not running` is the
-  state the Pi's boot check leaves (no SDK started); treat it the same way. `board not
+  design somebody loaded is still on the board, but nobody is connected and nothing has
+  happened for the 60 s quiet time: a design left behind is not someone using the board, so
+  it counts as idle like `loaded`, and your work replaces it (say which design you replaced).
+  `left: the SDK is not running` is the state the Pi's boot check leaves after every boot of
+  an FPGA board (it never starts the SDK); it is idle the same way. `board not
   present` and `failed: ...` are not idle either. A chip board always says `not an fpga
   board` (checked live), so this state says nothing about a chip board: it has its own rule
   below.
   `idle_display` is `null` only when the board is not reachable.
 - **Idle** (FPGA board) is `reachable: true`, `clients: 0` and `idle_display.state` `loaded`
-  on two reads at least 15 s apart. Anything else is not idle.
+  or `left: <design>` on two reads at least 15 s apart. Anything else is not idle.
 - **Idle** (chip board) is `reachable: true` and `clients: 0` on two reads at least 15 s
   apart; `idle_display.state` is not used. `clients` above 0 is in use; anything unreadable
   is unknown.

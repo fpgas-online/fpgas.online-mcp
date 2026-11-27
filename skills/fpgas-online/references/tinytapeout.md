@@ -235,6 +235,7 @@ for i in $(seq 1 12); do
 done
 ```
 
-If it never reaches `loaded` (a design is `left`, or `failed: ...`), say so; do not
+A design that stays (`left: <design>`) is fine: it counts as idle for the next user, who
+replaces it. If it shows `failed: ...` or never settles, say so; do not
 power-cycle to force it (power.md, only for a board that is actually down). An upload of yours
 stays on the Pi until 16 newer ones push it out.
