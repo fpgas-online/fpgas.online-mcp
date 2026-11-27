@@ -204,10 +204,20 @@ async def test_the_option_on_an_offered_pi_is_harmless(stack):  # noqa: F811
 async def test_the_option_is_refused_where_it_does_not_apply(stack, board, expected):  # noqa: F811
     setup_port(stack)
     async with broker() as c:
-        for op in ("claim_board", "board_status"):
-            e = await refused(c, op, board=board, purpose="look", allow_unoffered=True)
-            assert e.code == "unoffered_not_covered" and expected in e.message
+        e = await refused(c, "claim_board", board=board, purpose="look", allow_unoffered=True)
+        assert e.code == "unoffered_not_covered" and expected in e.message
+        # board_status still answers, with the option ignored and the reason under not_offered
+        status = await c.call("board_status", board=board, check_use=False, allow_unoffered=True)
+        assert status["board"]["id"] == board and status["allow_unoffered"] is False
+        assert status["not_offered"].startswith(f"allow_unoffered was ignored: {expected}")
+        assert "offered_note" not in status
     assert stack.inuse.calls == [] and stack.state.claims.all() == []
+
+
+async def test_board_status_ignoring_the_option_checks_as_without_it(stack):  # noqa: F811
+    async with broker() as c:
+        status = await c.call("board_status", board="ps1:pi3", allow_unoffered=True)
+    assert status["in_use"]["verdict"] == "idle" and stack.inuse.kw[-1]["allow_unoffered"] is False
 
 
 async def test_a_missing_or_setup_port_pi_is_told_the_option_will_not_help(stack):  # noqa: F811

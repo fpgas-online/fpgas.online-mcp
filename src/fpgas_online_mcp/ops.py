@@ -396,15 +396,18 @@ async def op_list_boards(state: State, args: dict, conn: Conn) -> dict:
 
 async def op_board_status(state: State, args: dict, conn: Conn) -> dict:
     board = await _resolve(state, args)
-    allow = _allow_unoffered(args, board)
+    # Unlike claim_board, an option that does not cover the board is ignored, with the reason shown.
+    asked = _bool(args, "allow_unoffered")
+    refusal = unoffered_refusal(board) if asked else None
+    allow = asked and refusal is None
     claim = state.claims.for_board(str(board.id))
     result = {"board": _board_view(board, claim, conn, full=True)}
     host = await _host_or_none(state, board)
     if host is not None:
         result["board"]["host"] = str(host)
     result["board"].update(await _welland_facts(state, board))
-    if allow:
-        result["allow_unoffered"] = True  # also tells a newer front end that this broker knows the option
+    if asked:
+        result["allow_unoffered"] = allow  # the key also tells a newer front end that this broker knows the option
     _offered_note(result, board, allow)
     if args.get("check_use", True) is not False:
         if needs_option(board, allow):  # no ssh at all (see boards.needs_option)
@@ -415,6 +418,8 @@ async def op_board_status(state: State, args: dict, conn: Conn) -> dict:
         result["in_use"] = _verdict_view(verdict)
         if verdict.not_offered:
             result["not_offered"] = not_offered(board)
+    if refusal is not None:
+        result["not_offered"] = f"allow_unoffered was ignored: {refusal}"
     return _fit_status(result)
 
 
