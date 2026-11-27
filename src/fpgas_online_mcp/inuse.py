@@ -42,6 +42,7 @@ TT_MAX_READS = 10
 TT_MAX_WAITING_READS = 3  # the first read plus two re-reads
 
 MAX_OTHER_CONNECTIONS = 5
+MAX_IDLE_WINDOWS = 3
 TT_NOT_LISTED = "carries a Tiny Tapeout board the Tiny Tapeout site does not list"
 TT_NO_SERIAL = "the Pi did not report its Tiny Tapeout board's serial, so web visitors cannot be checked"
 TRUNCATED = "in-use output was truncated"
@@ -66,6 +67,9 @@ _UNKNOWN_MARKERS = (
 )
 _CONN = re.compile(r"^  (\S+)$")
 _TMUX_CLIENT = re.compile(r"^  (/dev/\S+ \S+ idle \d+ s)$")
+# a program in a tmux window whose session had no key press for 5 minutes: not use, but the agent
+# should tell the user what it would disturb
+_IDLE_WINDOW = re.compile(r"^  window pid (\d+) \((.*?)\), no key press for (\d+) min: (.*)$")
 
 
 @dataclass(frozen=True)
@@ -157,23 +161,31 @@ def parse_script_output(
             active.append(_board_text(m[1]))
     unknown = [_board_text(ln.strip()) for ln in lines if any(p.match(ln) for p in _UNKNOWN_MARKERS)]
     clients = [_board_text("tmux client " + m[1]) for ln in lines if (m := _TMUX_CLIENT.match(ln))]
+    windows = [
+        _board_text(f"tmux window pid {m[1]} ({m[2]}): no key press for {m[3]} min: {m[4]}")
+        for ln in lines
+        if (m := _IDLE_WINDOW.match(ln))
+    ]
+    if len(windows) > MAX_IDLE_WINDOWS:
+        windows = [*windows[:MAX_IDLE_WINDOWS], f"… and {len(windows) - MAX_IDLE_WINDOWS} more idle tmux windows"]
     if truncated:
         if script_verdict == "in use":
             return "in use", [*active, *clients, TRUNCATED]
         return "unknown", [TRUNCATED, *unknown]
     if script_verdict.startswith("unknown"):
-        return "unknown", [*unknown, *notes] or ["the in-use script could not check everything"]
+        return "unknown", [*unknown, *notes, *windows] or ["the in-use script could not check everything"]
     if active:
-        return "in use", [*active, *clients, *notes]
+        return "in use", [*active, *clients, *notes, *windows]
     if unknown:
-        return "unknown", [*unknown, *notes]
+        return "unknown", [*unknown, *notes, *windows]
     if script_verdict == "idle" or notes:
         # idle is not a promise: show who else is connected so the caller can ask the user
         others = [_board_text(f"other ssh connection from {a}") for a in _other_addresses(lines)]
         if len(others) > MAX_OTHER_CONNECTIONS:
             extra = len(others) - MAX_OTHER_CONNECTIONS
             others = [*others[:MAX_OTHER_CONNECTIONS], f"… and {extra} more ssh connection address(es)"]
-        return "idle", [*notes, *others]
+        # tmux clients too (an idle client says someone may be reading); idle windows last
+        return "idle", [*notes, *others, *clients, *windows]
     return "unknown", ["the in-use script gave an unreadable verdict"]
 
 

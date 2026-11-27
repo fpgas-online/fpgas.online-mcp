@@ -10,7 +10,9 @@ Full docs: https://docs.fpgas.online/en/latest/user/index.html
 `ControlPersist` masters, the site's own checks), so a count of logins says little. Look
 for recent activity. The rule used below:
 
-> Activity in the last **15 minutes (900 s)** means in use. Nothing for 15 minutes means idle.
+> A key press in tmux in the last **5 minutes (300 s)**, or other activity (an ssh terminal,
+> a change in `~/Uploads`) in the last **15 minutes (900 s)**, means in use, and so does any
+> command running for another login. Nothing like that means idle.
 
 Idle is not a promise: someone may be reading the screen or the camera. Tell the user which
 board you are about to disturb.
@@ -37,12 +39,12 @@ One command shows everything. Set up ssh first (ssh.md; `A` is the host's alias)
 ```sh
 A=fo-ps1-pi3      # or fo-welland-pi-sw1-p2
 ssh "$A" sh -s <<'EOF'
-now=$(date +%s); win=900; unknown=
+now=$(date +%s); win=900; tmux_win=300; unknown=
 for c in ss tmux who find awk ps sort date; do
-  command -v "$c" > /dev/null || { echo "missing tool on host: $c"; unknown=1; }
+  command -v "$c" > /dev/null || { printf 'missing tool on host: %s\n' "$c"; unknown=1; }
 done
 set -- $SSH_CONNECTION; me_ip=$1; me_port=$2
-echo "you: $me_ip port $me_port"
+printf 'you: %s port %s\n' "$me_ip" "$me_port"
 
 echo "other ssh connections (address:port):"
 ss -tnH state established '( sport = :22 )' | awk -v ip="$me_ip" -v port="$me_port" '
@@ -51,24 +53,37 @@ ss -tnH state established '( sport = :22 )' | awk -v ip="$me_ip" -v port="$me_po
 
 t=$(tmux list-clients -F '#{client_activity} #{client_tty} #{session_name}' 2>&1) || {
   case "$t" in
-    *"no server running"*|*"error connecting"*) echo "tmux: no clients ($t)" ;;
-    *) echo "tmux: unexpected: $t"; unknown=1 ;;
+    *"no server running"*|*"error connecting"*) printf 'tmux: no clients (%s)\n' "$t" ;;
+    *) printf 'tmux: unexpected: %s\n' "$t"; unknown=1 ;;
   esac
   t=; }
 echo "tmux clients:"
-echo "$t" | awk -v now="$now" 'NF { print "  " $2, $3, "idle", now-$1, "s" }'
-tmin=$(echo "$t" | awk -v now="$now" 'NF { i=now-$1; if (m=="" || i<m) m=i } END { print m }')
-# a job left running in a tmux window (a build started in the web terminal) has no key presses
-# and no sshd parent: a window is busy when its process has a child (a command, a script, a
-# `job &`) or is itself not a shell or the help window's tail
-pp=$(tmux list-panes -a -F '#{pane_pid} #{pane_current_command}' 2>&1) || pp=
-pb=$( { echo "$pp" | awk 'NF { print "P", $0 }'; ps -A -o ppid=,args=; } | awk '
-  $1 == "P" { if ($2 ~ /^[0-9]+$/) cmd[$2]=$3; next }
+printf '%s\n' "$t" | awk -v now="$now" 'NF { print "  " $2, $3, "idle", now-$1, "s" }'
+tmin=$(printf '%s\n' "$t" | awk -v now="$now" 'NF { i=now-$1; if (m=="" || i<m) m=i } END { print m }')
+# a job left running in a tmux window (a build started in the web terminal) has no sshd parent:
+# a window is busy when its process has a child (a command, a script, a `job &`) or is itself not
+# a shell or the help window's tail. It counts while its session had a key press in the last
+# $tmux_win s (#{session_activity}: key presses and attaching move it, output does not), or when
+# tmux gives no such time; otherwise it is listed as idle with the minutes since the last key press
+pp=$(tmux list-panes -a -F '#{pane_pid} #{session_activity} #{pane_current_command}' 2>&1) || pp=
+pw=$( { printf '%s\n' "$pp" | awk 'NF { print "P", $0 }'; ps -A -o ppid=,args=; } | awk -v now="$now" -v win="$tmux_win" '
+  $1 == "P" { if ($2 !~ /^[0-9]+$/) next
+              p=$2; a="?"; if (NF > 3 && $3 ~ /^[0-9]+$/ && $3 > 0) a=$3
+              if (NF > 3) cmd[p]=$4; else cmd[p]=$3
+              if (!(p in act) || a == "?" || (act[p] != "?" && a+0 > act[p]+0)) act[p]=a
+              next }
   ($1 in cmd) { a=$0; sub(/^ *[0-9]+ +/,"",a); kid[$1]=a }
-  END { for (p in cmd) if ((p in kid) || cmd[p] !~ /^-?(zsh|bash|sh|tail)$/)
-          print "  window pid " p " (" cmd[p] "): " ((p in kid) ? substr(kid[p],1,60) : cmd[p]) }')
+  END { for (p in cmd) if ((p in kid) || cmd[p] !~ /^-?(zsh|bash|sh|tail)$/) {
+          what=cmd[p]; if (p in kid) what=substr(kid[p],1,60)
+          if (act[p] != "?" && now-act[p] >= win)
+            print "I  window pid " p " (" cmd[p] "), no key press for " int((now-act[p])/60) " min: " what
+          else print "B  window pid " p " (" cmd[p] "): " what } }')
+pb=$(printf '%s\n' "$pw" | awk 'sub(/^B/, "")')
+pq=$(printf '%s\n' "$pw" | awk 'sub(/^I/, "")')
 echo "tmux windows running a program:"
-[ -n "$pb" ] && echo "$pb"
+[ -n "$pb" ] && printf '%s\n' "$pb"
+printf 'tmux windows running a program, idle (no key press for %s s):\n' "$tmux_win"
+[ -n "$pq" ] && printf '%s\n' "$pq"
 
 # terminal logins: find the pts/N field, then the idle field (the last one that looks like
 # `.`, `old` or H:MM; the login time is earlier on the line)
@@ -79,16 +94,16 @@ w=$(who -u | awk '{ for (k=1; k<=NF; k++) if ($k ~ /^pts\//) break
   i=0; if ($j=="old") i=999999; else if ($j ~ /:/) { split($j,a,":"); i=a[1]*3600+a[2]*60 }
   print i, $k, $NF }')
 echo "ssh terminals (who -u):"
-echo "$w" | awk 'NF { print "  " $2, $3, "idle >=", $1, "s" }'
-echo "$w" | awk '$1 == "?" { f=1 } END { exit !f }' && unknown=1
-wmin=$(echo "$w" | awk '$1 != "?" && NF { if (m=="" || $1<m) m=$1 } END { print m }')
+printf '%s\n' "$w" | awk 'NF { print "  " $2, $3, "idle >=", $1, "s" }'
+printf '%s\n' "$w" | awk '$1 == "?" { f=1 } END { exit !f }' && unknown=1
+wmin=$(printf '%s\n' "$w" | awk '$1 != "?" && NF { if (m=="" || $1<m) m=$1 } END { print m }')
 
 umin=
 if [ -d "$HOME/Uploads" ]; then
   u=$(find "$HOME/Uploads" -printf '%T@\n' | sort -n | tail -n 1)
   [ -n "$u" ] && umin=$((now - ${u%.*}))
 fi
-echo "newest change in ~/Uploads: ${umin:-none} s ago"
+printf 'newest change in ~/Uploads: %s s ago\n' "${umin:-none}"
 
 # commands running for other ssh logins (an agent's `ssh host 'flash...'`): any process that
 # is a direct child of an sshd login other than yours, apart from tmux (counted above) and
@@ -102,18 +117,19 @@ procs=$(ps -u "$(id -u)" -o pid=,ppid=,etimes=,args= | awk -v me="$$" -v win="$w
         for (q in ppid) if (ppid[q] != r && args[ppid[q]] ~ /^sshd(-session)?: [a-z]+@/ && args[q] !~ /^tmux/ && !(args[q] ~ /sftp-server/ && et[q] >= win))
           print "  pid " q ", running " et[q] " s: " substr(args[q],1,70) }')
 if [ "$procs" = "?" ]; then echo "  could not find your own login in the process list"; unknown=1; procs=; fi
-[ -n "$procs" ] && echo "$procs"
-others=$(echo "$procs" | awk 'NF { n++ } END { print n+0 }')
+[ -n "$procs" ] && printf '%s\n' "$procs"
+others=$(printf '%s\n' "$procs" | awk 'NF { n++ } END { print n+0 }')
 
 verdict=idle
-for kv in "tmux client:$tmin" "ssh terminal:$wmin" "~/Uploads change:$umin"; do
+if [ -n "$tmin" ] && [ "$tmin" -lt "$tmux_win" ]; then verdict="in use"; printf 'active: tmux client, %s s ago\n' "$tmin"; fi
+for kv in "ssh terminal:$wmin" "~/Uploads change:$umin"; do
   v=${kv#*:}
-  if [ -n "$v" ] && [ "$v" -lt "$win" ]; then verdict="in use"; echo "active: ${kv%%:*}, $v s ago"; fi
+  if [ -n "$v" ] && [ "$v" -lt "$win" ]; then verdict="in use"; printf 'active: %s, %s s ago\n' "${kv%%:*}" "$v"; fi
 done
-if [ "$others" -gt 0 ]; then verdict="in use"; echo "active: $others command(s) running for another login"; fi
+if [ "$others" -gt 0 ]; then verdict="in use"; printf 'active: %s command(s) running for another login\n' "$others"; fi
 if [ -n "$pb" ]; then verdict="in use"; echo "active: a program running in a tmux window"; fi
 if [ "$verdict" = idle ] && [ -n "$unknown" ]; then verdict="unknown (treat as in use)"; fi
-echo "verdict: $verdict"
+printf 'verdict: %s\n' "$verdict"
 EOF
 ```
 
@@ -126,13 +142,22 @@ It reuses your master connection from ssh.md (the first call opens it). It print
   one address (see limits). Entries in this list are not use by themselves. On `pi21` six
   old connections from the site gateway were listed with nothing running in them.
 - `tmux clients` lists attached terminals with their idle seconds (the key-press clock of
-  that client). `tmux: no clients (...)` means tmux has no server: no interactive terminal is
-  open (the server exits when the last one closes).
+  that client, `#{client_activity}`). A client with a key press under 300 s means in use.
+  `tmux: no clients (...)` means tmux has no server: no interactive terminal is open (the
+  server exits when the last one closes).
 - `tmux windows running a program` lists tmux windows whose process has a child process (a
   command, a script, a backgrounded `job &`), or is itself not a shell (`zsh`, `bash`, `sh`)
-  or the help window's `tail`: a build or capture someone started in the web terminal and
-  left running. It has no key presses and no sshd parent, so no other signal sees it once it
-  runs past 15 minutes. Any line here means in use. A shell at its prompt has no child.
+  or the help window's `tail` (a build or capture someone started in the web terminal), and
+  whose session had a key press in the last 300 s. Any line here means in use. A shell at its
+  prompt has no child. The key-press time is the session's `#{session_activity}`: tmux moves
+  it when someone presses a key in that session (or attaches to it, or creates it), not when a
+  program writes output, so a redrawing `htop` does not keep it fresh; `tmux send-keys` does
+  not move it either. A window whose session time tmux does not give counts as in use.
+- `tmux windows running a program, idle` lists the same kind of window whose session had no
+  key press for 300 s, with the minutes since the last one
+  (`window pid 123 (minicom), no key press for 18 min: minicom ...`). Nobody is typing there,
+  so it is not use, but the program is still running: tell the user which one your work would
+  disturb.
 - `ssh terminals` lists logins that have a terminal, with idle time from `who -u` (accurate
   to the minute; `old` counts as a day; the script finds the idle field by its shape, so a
   different column layout is tolerated). This covers a terminal that is not in tmux.
@@ -144,11 +169,16 @@ It reuses your master connection from ssh.md (the first call opens it). It print
   `~/Uploads`, so this is the only signal for them. tmux is skipped (counted above) and so
   is an `sftp-server` older than 15 minutes (an idle file-transfer session, such as the
   site's). Any command listed means in use, however long it has run.
-- The verdict line: `in use` with one `active:` line per signal (under 900 s, or any command
-  above), `unknown (treat as in use)` when the script could not check something (a tool is
-  missing on the host, tmux said something unexpected, a `who` line did not parse, or it
-  could not find your own login), otherwise `idle`. Treat `unknown` like `in use`: ask the
-  user.
+- The verdict line: `in use` with one `active:` line per signal (a tmux key press under
+  300 s, an ssh terminal or `~/Uploads` change under 900 s, a tmux window running a program,
+  or any command for another login), `unknown (treat as in use)` when the script could not
+  check something (a tool is missing on the host, tmux said something unexpected, a `who`
+  line did not parse, or it could not find your own login), otherwise `idle`. Treat
+  `unknown` like `in use`: ask the user.
+
+The outputs below were measured before the script printed the `tmux windows running a
+program, idle (no key press for 300 s):` line, which it now prints right after `tmux windows
+running a program:`.
 
 An idle host prints (measured on ps1 `pi21`; the six lines are old connections from the
 site gateway, listed but not use; `::ffff:` is how the host writes an IPv4 address):
@@ -172,8 +202,10 @@ The `tmux: no clients (...)` line is not a failure: the message is `no server ru
 where nobody had logged in). Any other tmux message gives `unknown`. A tmux server whose
 windows ran a `bash` script sleeping in `sleep 120`, a `sleep 120 &` typed at a shell
 prompt, an idle shell and `tail` (a private test server on `pi-sw1-p2`) listed the first two
-only, with `active: a program running in a tmux window`. The old `sftp-server`
-sessions of the gateway are not listed (they were, before the 15-minute exception).
+only, with `active: a program running in a tmux window` (measured before the 5-minute rule:
+now they count only while their session had a key press in the last 5 minutes). The old
+`sftp-server` sessions of the gateway are not listed (they were, before the 15-minute
+exception).
 
 Another agent running `ssh host 'sleep 60'` (a separate non-interactive connection, no
 terminal; measured on `pi21`) prints:
@@ -245,16 +277,20 @@ count, not the connection list.
   Typing `exit` there ended that window for everyone in testing (the tmux server went away,
   closing every attached terminal). On welland `pi-sw1-p2` each login is its own bash. Use
   non-interactive `ssh host cmd` for your own work.
-- **Someone only watching** the web page, the camera, or a tmux window that has not been
-  touched for 15 minutes is not detected. A viewer who is reading is not "using" the
+- **Someone only watching** the web page, the camera, or a tmux window that has had no key
+  press for 5 minutes is not detected. A viewer who is reading is not "using" the
   board by the activity rule.
 - **A long job in the web terminal** (a 20-minute build watched on the camera): on ps1 it is
   seen only through `tmux windows running a program` (its shell runs under the tmux server,
-  not sshd, and nobody presses keys). A job that is a shell busy on its own, with no child
-  process, is missed there. On welland the login shell is a child of sshd, so `commands
+  not sshd), and only for 5 minutes after the last key press in its session; after that it
+  is listed under `tmux windows running a program, idle` and the verdict can be `idle`. Tell
+  the user what is running before you disturb it. A job that is a shell busy on its own, with
+  no child process, is missed there. On welland the login shell is a child of sshd, so `commands
   running for other logins` lists it while the terminal is open, job or not.
-- **A forgotten program** left running in a tmux window (`minicom`, `htop`) keeps the host
-  `in use` until someone ends it. That errs on the safe side: ask the user.
+- **A forgotten program** left running in a tmux window (`minicom`, `htop`) counts as in use
+  for 5 minutes after the last key press in its session, then as idle, listed with its pid,
+  program and minutes since the last key press. Tell the user which program your work will
+  disturb (a power cycle ends it).
 - **Nothing shows web-page viewers** on welland or ps1: the page itself opens no
   connection until the terminal panel runs.
 - **No claim or reservation system** exists yet (the MCP server is planned to add one).
@@ -334,5 +370,6 @@ Nothing is changed by these GETs; poll at most every 10 s.
 
 - In use: do not cycle, do not load, do not write to `~/Uploads`. Pick another host
   (boards.md) or tell the user who and since when (the `tmux clients` line).
-- Idle: go ahead, and tell the user. Run the check again just before a destructive step.
+- Idle: go ahead, and tell the user, naming any program still running in an idle tmux
+  window. Run the check again just before a destructive step.
 - Unsure: ask.
