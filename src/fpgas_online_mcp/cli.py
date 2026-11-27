@@ -194,6 +194,11 @@ def fmt_fleet(r: dict) -> str:
     return "\n".join(lines)
 
 
+def _cell(v: Any) -> str:
+    """A table cell: any value as text, '-' for none."""
+    return "-" if v is None or v == "" else str(v)
+
+
 def fmt_switches(r: dict) -> str:
     lines = []
     if r.get("board"):
@@ -201,26 +206,38 @@ def fmt_switches(r: dict) -> str:
         lines.append(f"the port of {r['board']}{on}")
     for s in r.get("switches", []):
         lines.append(
-            f"switch {s.get('index')}: {s.get('name')} ({s.get('model')}), {s.get('status')}, read {s.get('read_at')}; "
-            f"{s.get('empty_ports')} empty ports"
+            f"switch {_cell(s.get('index'))}: {_cell(s.get('name'))} ({_cell(s.get('model'))}), "
+            f"{_cell(s.get('status'))}, read {_cell(s.get('read_at'))}; {_cell(s.get('empty_ports'))} empty ports"
         )
-        for issue in s.get("known_issues") or []:
-            lines.append(f"  known issue: {issue.get('text')} ({issue.get('issue')}, {issue.get('url')})")
+        issues = s.get("known_issues") or []
+        if isinstance(issues, int):  # shortened to a count to fit
+            lines.append(f"  {issues} known issues (switch_ports with this switch shows them)")
+            issues = []
+        for issue in issues:
+            if not isinstance(issue, dict):
+                lines.append(f"  known issue: {issue}")
+                continue
+            if issue.get("text"):
+                where = ", ".join(str(issue[k]) for k in ("issue", "url") if issue.get(k))
+                text = f"{issue['text']} ({where})"
+            else:  # shortened to its issue and link to fit
+                text = f"{_cell(issue.get('issue'))} ({_cell(issue.get('url'))})"
+            lines.append(f"  known issue: {text}")
     rows, why = [], []
     for row in r.get("ports", []):
         p = dict(zip(r["columns"], row, strict=True))
         rows.append(
             [
-                str(p.get("switch")),
-                str(p.get("port")),
-                ",".join(p.get("machines") or []) or "-",
+                _cell(p.get("switch")),
+                _cell(p.get("port")),
+                ",".join(_cell(m) for m in p.get("machines") or []) or "-",
                 "up" if p.get("link_up") else "down",
-                p.get("speed") or "-",
-                p.get("poe_state") or "-",
-                p.get("watts") or "-",
-                p.get("vlan") or "-",
-                " ".join(x for x in (p.get("lldp_name"), p.get("lldp_port")) if x) or "-",
-                f"{p.get('rx_errors') or '-'}/{p.get('tx_errors') or '-'}",
+                _cell(p.get("speed")),
+                _cell(p.get("poe_state")),
+                _cell(p.get("watts")),
+                _cell(p.get("vlan")),
+                " ".join(_cell(x) for x in (p.get("lldp_name"), p.get("lldp_port")) if x not in (None, "")) or "-",
+                f"{_cell(p.get('rx_errors'))}/{_cell(p.get('tx_errors'))}",
                 "ok" if p.get("net_ok") else "NOT OK",
             ]
         )

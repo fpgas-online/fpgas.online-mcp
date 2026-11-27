@@ -266,3 +266,27 @@ async def test_fleet_against_an_older_broker(stack, capsys):
     stack.broker._handlers.pop("switch_ports")
     code, out, err = await cli(capsys, "switches")
     assert code == 1 and "older" in err and "fpgas-online broker stop" in err
+
+
+def test_fmt_switches_takes_any_cell_type_and_short_summaries():
+    from fpgas_online_mcp.cli import fmt_switches
+    from fpgas_online_mcp.fleet import PORT_COLUMNS
+
+    row = dict.fromkeys(PORT_COLUMNS)
+    row |= {"switch": 1, "port": 2, "machines": ["pi-sw1-p2", None], "watts": 4.2, "vlan": 2102, "rx_errors": 3}
+    row |= {"speed": 1000, "lldp_name": 7, "net_ok": True}
+    r = {
+        "switches": [
+            {"index": 1, "name": "a", "known_issues": 2},
+            {"index": 2, "name": "b", "known_issues": [{"issue": "poe #16", "url": "https://x/16"}]},
+            {"index": 3, "name": "c"},
+        ],
+        "columns": PORT_COLUMNS,
+        "ports": [[row[c] for c in PORT_COLUMNS]],
+        "total": 1,
+        "offset": 0,
+    }
+    out = fmt_switches(r)
+    line = next(x for x in out.splitlines() if x.startswith("1 "))
+    assert line.split()[:9] == ["1", "2", "pi-sw1-p2,-", "down", "1000", "-", "4.2", "2102", "7"]
+    assert "2 known issues" in out and "known issue: poe #16 (https://x/16)" in out
