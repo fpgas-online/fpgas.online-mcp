@@ -211,8 +211,9 @@ Tapeout board gets that board's site rule as well. Since 2026-11-27
 with a key press under 300 s is in use, and a program in a tmux window is in use only while
 its session (`#{session_activity}`, which key presses move and output does not) had a key
 press under 300 s; otherwise it is a signal on the verdict, naming its pid, the program and the
-minutes since the last key press. ssh terminals and `~/Uploads` stay at 15 minutes (900 s),
-and a command running for another login is always in use.
+minutes since the last key press. Every last-activity window is 5 minutes (300 s): tmux key presses, ssh terminals and
+`~/Uploads` changes alike (the user: "Use a consistent value of 5m as last activity"), and a
+command running for another login is always in use.
 
 **The claim holder's own activity.** For the holder of a live claim, two signals are
 discounted because they are the holder's own doing: `~/Uploads` changes newer than the

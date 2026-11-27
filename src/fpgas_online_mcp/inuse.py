@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from importlib import resources
 from typing import Literal
 
+from . import config
 from .boards import (
     Board,
     BoardId,
@@ -67,7 +68,7 @@ _UNKNOWN_MARKERS = (
 )
 _CONN = re.compile(r"^  (\S+)$")
 _TMUX_CLIENT = re.compile(r"^  (/dev/\S+ \S+ idle \d+ s)$")
-# a program in a tmux window whose session had no key press for 5 minutes: not use, but the agent
+# a program in a tmux window whose session had no key press for the last-activity window: not use, but the agent
 # should tell the user what it would disturb
 _IDLE_WINDOW = re.compile(r"^  window pid (\d+) \((.*?)\), no key press for (\d+) min: (.*)$")
 
@@ -82,11 +83,20 @@ class Verdict:
     not_offered: bool = False
 
 
-def remote_script() -> str:
-    """The heredoc body of data/in_use.sh (the file is the whole block from in-use.md)."""
+SCRIPT_WINDOW = f"win={config.DEFAULT_LAST_ACTIVITY_S};"  # the one place the script sets its window
+
+
+def remote_script(window_s: int | None = None) -> str:
+    """The heredoc body of data/in_use.sh (the file is the whole block from in-use.md), with its
+    last-activity window set to `window_s`, by default config.toml's `last_activity`. That one value
+    is every window the script has: tmux key presses, ssh terminals, ~/Uploads, sftp-server."""
     text = resources.files("fpgas_online_mcp").joinpath("data/in_use.sh").read_text()
     start = text.index("<<'EOF'\n") + len("<<'EOF'\n")
-    return text[start : text.rindex("\nEOF") + 1]
+    body = text[start : text.rindex("\nEOF") + 1]
+    if body.count(SCRIPT_WINDOW) != 1:
+        raise RuntimeError(f"data/in_use.sh must set {SCRIPT_WINDOW!r} exactly once")
+    window_s = config.last_activity_s() if window_s is None else window_s
+    return body.replace(SCRIPT_WINDOW, f"win={int(window_s)};")
 
 
 def _now_iso() -> str:

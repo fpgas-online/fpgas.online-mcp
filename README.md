@@ -133,6 +133,7 @@ variables.
 | Claims | `$XDG_STATE_HOME/fpgas-online/claims/<site>_<name>.json`; broker log `broker.log` beside it |
 | Cache of site data | `$XDG_CACHE_HOME/fpgas-online/` |
 | ssh config, askpass script, known_hosts, `<site>.pw` | `$XDG_CONFIG_HOME/fpgas-online/` |
+| Settings (`config.toml`, optional) | `$XDG_CONFIG_HOME/fpgas-online/config.toml` |
 
 The defaults are `~/.local/state`, `~/.cache` and `~/.config`. The broker never
 edits `~/.ssh/config`.
@@ -158,6 +159,21 @@ A claim file looks like:
 
 Agents without the MCP tools can see who holds what with `fpgas-online claims`
 or by reading those files.
+
+## Settings
+
+One setting, in `~/.config/fpgas-online/config.toml` (`$XDG_CONFIG_HOME/fpgas-online/`):
+
+```toml
+# How long since the last activity a board's host still counts as in use: a key press in tmux,
+# an ssh terminal in use, a change in ~/Uploads (one value for all of them). Default "5m".
+last_activity = "5m"        # or "300s", "1h", or a number of seconds; 30 s to 24 h
+```
+
+The broker reads the file again on every in-use check, so an edit applies to the next check
+without a restart. `fpgas-online broker status` shows the value in use. A value that cannot be
+read, or any other key in the file (a typo, a table), is not replaced by the default: every
+in-use check says unknown (never idle) and names the file until it is fixed.
 
 ## Stopping the broker
 

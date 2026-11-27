@@ -724,3 +724,11 @@ async def test_tt_holder_discount_covers_a_claim_taken_on_a_left_design():
     assert v.verdict == "idle"
     v, _, _ = await run_tt(tt("waiting", clients=1), c=ttc("left: old"))
     assert v.verdict == "in use"
+
+
+async def test_a_bad_config_makes_a_tt_check_unknown_even_when_the_site_says_idle(own_config_dir):
+    (own_config_dir / "fpgas-online").mkdir(mode=0o700)
+    (own_config_dir / "fpgas-online" / "config.toml").write_text('last_activity = "soon"\n')
+    v, _, _ = await run_tt(tt("loaded"), tt("loaded"))
+    assert v.verdict == "unknown"
+    assert any("config.toml" in s for s in v.signals)

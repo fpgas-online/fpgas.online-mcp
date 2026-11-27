@@ -362,6 +362,11 @@ async def _broker_cmd(args: argparse.Namespace) -> tuple[Any, str | None, int]:
         if args.action == "status":
             info = await c.call("ping")
             text = f"running: version {info['version']}, pid {info['pid']}, started {when_epoch(info['started'])}"
+            la = info.get("last_activity_s")
+            if isinstance(la, int):
+                text += f"\nlast activity window: {la} s (last_activity in {info.get('config_file') or 'config.toml'})"
+            elif la is not None:
+                text += f"\nlast activity window: config error, every in-use check says unknown: {la}"
             if info.get("protocol", 1) != PROTOCOL:
                 text += (
                     f"\nthis CLI speaks protocol {PROTOCOL}, the broker {info.get('protocol', 1)}: board commands fail"

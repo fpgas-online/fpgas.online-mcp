@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, config
 from .paths import cache_dir, runtime_dir, state_dir
 from .protocol import MAX_LINE, PROTOCOL, BrokerError, decode, encode, error_response
 
@@ -64,7 +64,23 @@ class Broker:
         self._stop.set()
 
     async def _ping(self, args: dict, conn: Conn) -> dict:
-        return {"version": self.version, "protocol": self.protocol, "pid": os.getpid(), "started": self.started}
+        # the handshake must never depend on the config: any failure is said, not raised
+        try:
+            config_file: str | None = str(config.path())
+        except Exception:  # noqa: BLE001
+            config_file = None
+        try:
+            last_activity: int | str = config.last_activity_s()
+        except Exception as e:  # noqa: BLE001 - said, not hidden: every in-use check says unknown until fixed
+            last_activity = str(e) or type(e).__name__
+        return {
+            "version": self.version,
+            "protocol": self.protocol,
+            "pid": os.getpid(),
+            "started": self.started,
+            "last_activity_s": last_activity,
+            "config_file": config_file,
+        }
 
     async def _shutdown_if_idle(self, args: dict, conn: Conn) -> dict:
         """Stop after replying, unless claims exist, another client is connected or another request runs."""
