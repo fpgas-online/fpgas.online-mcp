@@ -282,6 +282,25 @@ async def test_holder_discount_keeps_idle_tmux_windows():
     assert v.verdict == "idle" and v.signals[1:] == IDLE_WINDOW_SIGNALS and "ignored" in v.signals[0]
 
 
+async def test_idle_verdict_keeps_connections_before_at_most_three_idle_windows():
+    conns = "other ssh connections (address:port):\n  9.9.9.9:1\n  8.8.8.8:2"
+    windows = "\n".join(f"  window pid {i} (htop), no key press for 9 min: htop" for i in range(10))
+    v = await inuse.check(board(), FakeSsh(script_out("idle", conns, windows)), None, None)
+    assert v.verdict == "idle"
+    assert v.signals == [
+        "board says: other ssh connection from 9.9.9.9",
+        "board says: other ssh connection from 8.8.8.8",
+        *[f"board says: tmux window pid {i} (htop): no key press for 9 min: htop" for i in range(3)],
+        "… and 7 more idle tmux windows",
+    ]
+
+
+async def test_idle_verdict_lists_tmux_clients():
+    out = script_out("idle", "tmux clients:\n  /dev/pts/0 default-0 idle 420 s")
+    v = await inuse.check(board(), FakeSsh(out), None, None)
+    assert v.verdict == "idle" and v.signals == ["board says: tmux client /dev/pts/0 default-0 idle 420 s"]
+
+
 async def test_a_busy_tmux_window_is_not_an_idle_one():
     out = script_out("in use", "tmux windows running a program:\n  window pid 9 (htop): htop",
                      "active: a program running in a tmux window")  # fmt: skip

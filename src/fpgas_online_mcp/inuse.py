@@ -42,6 +42,7 @@ TT_MAX_READS = 10
 TT_MAX_WAITING_READS = 3  # the first read plus two re-reads
 
 MAX_OTHER_CONNECTIONS = 5
+MAX_IDLE_WINDOWS = 3
 TT_NOT_LISTED = "carries a Tiny Tapeout board the Tiny Tapeout site does not list"
 TT_NO_SERIAL = "the Pi did not report its Tiny Tapeout board's serial, so web visitors cannot be checked"
 TRUNCATED = "in-use output was truncated"
@@ -165,6 +166,8 @@ def parse_script_output(
         for ln in lines
         if (m := _IDLE_WINDOW.match(ln))
     ]
+    if len(windows) > MAX_IDLE_WINDOWS:
+        windows = [*windows[:MAX_IDLE_WINDOWS], f"… and {len(windows) - MAX_IDLE_WINDOWS} more idle tmux windows"]
     if truncated:
         if script_verdict == "in use":
             return "in use", [*active, *clients, TRUNCATED]
@@ -181,7 +184,8 @@ def parse_script_output(
         if len(others) > MAX_OTHER_CONNECTIONS:
             extra = len(others) - MAX_OTHER_CONNECTIONS
             others = [*others[:MAX_OTHER_CONNECTIONS], f"… and {extra} more ssh connection address(es)"]
-        return "idle", [*notes, *windows, *others]
+        # tmux clients too (an idle client says someone may be reading); idle windows last
+        return "idle", [*notes, *others, *clients, *windows]
     return "unknown", ["the in-use script gave an unreadable verdict"]
 
 
