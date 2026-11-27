@@ -22,6 +22,7 @@ USER_AGENT = f"fpgas-online-mcp/{__version__}"
 TIMEOUT_S = 15.0
 
 TTL_REGISTRY_S = 60
+TTL_SWITCHES_S = 60
 TTL_PS1_LIST_S = 60
 TTL_TT_HOME_S = 300
 TTL_TT_STATUS_S = 10
@@ -74,6 +75,14 @@ def _parse_registry(data: bytes) -> list[dict]:
     if len(good) < len(machines):
         log.warning("welland registry: skipped %d entries that are not objects", len(machines) - len(good))
     return good
+
+
+def _parse_switches(data: bytes) -> list[dict]:
+    """The switches of welland's management page (read only: the page's actions are never used)."""
+    switches = json.loads(data)["switches"]
+    if not isinstance(switches, list) or not all(isinstance(s, dict) for s in switches):
+        raise ValueError("switches is not a list of objects")
+    return switches
 
 
 def _unique(items) -> list[str]:
@@ -176,6 +185,11 @@ class SiteClient:
 
     async def welland_registry(self, live: bool = False) -> tuple[list[dict], Entry]:
         return await self._get("welland", "/fleet/registry.json", TTL_REGISTRY_S, _parse_registry, live)
+
+    async def welland_switches(self, live: bool = False) -> tuple[list[dict], Entry]:
+        """welland's switch ports (link, PoE state, watts, the machines on each), cached like the registry.
+        A plain GET of the public management page; nothing here ever switches a port."""
+        return await self._get("welland", "/management/switches.json", TTL_SWITCHES_S, _parse_switches, live)
 
     async def ps1_hosts(self, live: bool = False) -> tuple[list[str], Entry]:
         return await self._get("ps1", "/fpgas/", TTL_PS1_LIST_S, _parse_ps1_hosts, live)
