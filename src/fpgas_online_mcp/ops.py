@@ -423,7 +423,8 @@ async def _welland_facts(state: State, board: Board) -> dict:
     facts = registry_facts(entry) if entry else {}
     if "boot_check" in facts:
         facts["boot_check"]["at"] = _short(facts["boot_check"]["at"])
-    port = await port_facts(state.sites, board.name)
+    serial = entry.get("serial") if entry else None
+    port = await port_facts(state.sites, board.name, serial if isinstance(serial, str) else None)
     if port is not None:
         facts["switch_port"] = port
     return facts

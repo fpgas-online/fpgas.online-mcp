@@ -234,23 +234,51 @@ async def test_welland_entry_is_the_chosen_registry_entry(client, site):  # noqa
     assert await welland_entry(client, "pi-sw9-p99") is None
 
 
+P2 = "00000000cc479fd1"  # the serial of pi-sw1-p2 in the registry and on its switch port
+
+
 async def test_port_facts_from_the_switch_page(client, site):  # noqa: F811
-    assert await port_facts(client, "pi-sw1-p2") == {"link_up": True, "poe_state": "delivering", "watts": 4.2}
-    assert await port_facts(client, "pi-sw2-p38") == {"link_up": True, "poe_state": "delivering", "watts": 4.2}
-    assert await port_facts(client, "pi-sw1-p1") == {"link_up": False, "poe_state": "searching", "watts": None}
-    assert await port_facts(client, "pi-sw3-p1") is None  # no such switch
-    assert await port_facts(client, "pi-sw1-p40") is None  # no such port on the page
-    assert await port_facts(client, "raspberry") is None
+    assert await port_facts(client, "pi-sw1-p2", P2) == {"link_up": True, "poe_state": "delivering", "watts": 4.2}
+    assert await port_facts(client, "pi-sw2-p38", "80ba29ff33528664") == {
+        "link_up": True,
+        "poe_state": "delivering",
+        "watts": 4.2,
+    }
+    assert await port_facts(client, "pi-sw3-p1", None) is None  # no such switch
+    assert await port_facts(client, "pi-sw1-p40", None) is None  # no such port on the page
+    assert await port_facts(client, "raspberry", None) is None
     assert all(r.method == "GET" for r in site.requests)
+
+
+async def test_port_facts_only_for_the_pi_on_that_port(client, site):  # noqa: F811
+    assert await port_facts(client, "pi-sw1-p1", None) is None  # nobody on the port
+    assert await port_facts(client, "pi-sw1-p2", "00000000deadbeef") is None  # another Pi's serial is there
+    assert await port_facts(client, "pi-sw1-p2", None) is None  # the row has a serial, we have none
+
+
+def switches(*ports):
+    return httpx.Response(200, json={"switches": [{"index": 1, "ports": list(ports)}]})
+
+
+async def test_port_facts_match_by_hostname_when_the_row_has_no_serial(client, site):  # noqa: F811
+    row = {"port": 2, "link_up": True, "poe_state": "delivering", "watts": "3.5"}
+    site.override[("welland.fpgas.online", "/management/switches.json")] = switches(
+        {**row, "machines": [{"hostname": "pi-sw1-p2"}]}
+    )
+    assert (await port_facts(client, "pi-sw1-p2", P2))["watts"] == 3.5
 
 
 async def test_port_facts_unreadable_is_none(client, site):  # noqa: F811
     site.override[("welland.fpgas.online", "/management/switches.json")] = httpx.Response(500)
-    assert await port_facts(client, "pi-sw1-p2") is None
-    site.override[("welland.fpgas.online", "/management/switches.json")] = httpx.Response(
-        200, json={"switches": [{"index": 1, "ports": [{"port": 2, "link_up": "yes", "poe_state": 3, "watts": "x"}]}]}
+    assert await port_facts(client, "pi-sw1-p2", P2) is None
+
+
+@pytest.mark.parametrize("watts", [True, False, "x", None, [], "nan-ish"])
+async def test_port_facts_odd_values_are_none(client, site, watts):  # noqa: F811
+    site.override[("welland.fpgas.online", "/management/switches.json")] = switches(
+        {"port": 2, "link_up": "yes", "poe_state": 3, "watts": watts, "machines": [{"serial": P2}]}
     )
-    assert await port_facts(client, "pi-sw1-p2") == {"link_up": None, "poe_state": None, "watts": None}
+    assert await port_facts(client, "pi-sw1-p2", P2) == {"link_up": None, "poe_state": None, "watts": None}
 
 
 async def test_not_offered_of_a_pi_with_a_tt_board_also_points_to_the_board(client):  # noqa: F811

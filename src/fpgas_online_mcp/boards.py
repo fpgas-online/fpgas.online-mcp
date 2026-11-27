@@ -1,6 +1,7 @@
 """Board identity and the merged inventory of the three sites. Read-only: no ssh, no in-use checks."""
 
 import asyncio
+import math
 import re
 from dataclasses import dataclass, field
 
@@ -371,10 +372,31 @@ def registry_facts(entry: dict) -> dict:
     return facts
 
 
-async def port_facts(sites: SiteClient, name: str) -> dict | None:
+def _watts(value) -> float | None:
+    """A port's watts as a number, or None (a JSON true is not 1 W; "" and non-numbers are None)."""
+    if isinstance(value, bool) or not isinstance(value, str | int | float) or value == "":
+        return None
+    try:
+        watts = float(value)
+    except ValueError:
+        return None
+    return watts if math.isfinite(watts) else None
+
+
+def _on_port(machine, name: str, serial: str | None) -> bool:
+    """Whether a machine of a switch port row is this Pi: by serial when the row gives one, else by hostname."""
+    if not isinstance(machine, dict):
+        return False
+    if isinstance(machine.get("serial"), str):
+        return serial is not None and machine["serial"] == serial
+    return machine.get("hostname") == name
+
+
+async def port_facts(sites: SiteClient, name: str, serial: str | None) -> dict | None:
     """Read-only facts of the switch port a welland Pi's name gives: {"link_up", "poe_state", "watts"}
-    (a value the page does not give plainly is None). None when the page cannot be read or does not
-    show that port. Nothing here ever acts on a switch."""
+    (a value the page does not give plainly is None). None when the page cannot be read, does not show
+    that port, or shows another machine on it (`serial`: the Pi's registry serial). Nothing here ever
+    acts on a switch."""
     sp = switch_port("welland", name)
     if sp is None:
         return None
@@ -387,17 +409,16 @@ async def port_facts(sites: SiteClient, name: str) -> dict | None:
         if s.get("index") != switch:
             continue
         for p in s.get("ports") or []:
-            if isinstance(p, dict) and p.get("port") == port:
-                link, poe, watts = p.get("link_up"), p.get("poe_state"), p.get("watts")
-                try:
-                    watts = float(watts) if isinstance(watts, str | int | float) and watts != "" else None
-                except ValueError:
-                    watts = None
-                return {
-                    "link_up": link if isinstance(link, bool) else None,
-                    "poe_state": poe if isinstance(poe, str) and poe else None,
-                    "watts": None if isinstance(watts, bool) else watts,
-                }
+            if not (isinstance(p, dict) and p.get("port") == port):
+                continue
+            if not any(_on_port(m, name, serial) for m in p.get("machines") or []):
+                return None
+            link, poe = p.get("link_up"), p.get("poe_state")
+            return {
+                "link_up": link if isinstance(link, bool) else None,
+                "poe_state": poe if isinstance(poe, str) and poe else None,
+                "watts": _watts(p.get("watts")),
+            }
     return None
 
 
