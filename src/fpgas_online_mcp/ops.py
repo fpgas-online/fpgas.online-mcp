@@ -33,6 +33,7 @@ from .boards import (
     tt_serials_on,
 )
 from .broker import Broker, Conn
+from .cache import Entry
 from .claims import Claim, ClaimConflict, ClaimGone, ClaimStore
 from .paths import PathTooLong
 from .protocol import BrokerError
@@ -650,8 +651,8 @@ async def op_claims(state: State, args: dict, conn: Conn) -> dict:
 # --- fleet_details and switch_ports (welland's fleet and switch pages, read-only) -------------------
 
 
-async def _fleet_host(state: State, args: dict) -> tuple[Board, BoardId, dict, list[dict], str]:
-    """(board, its welland Pi, the Pi's registry entry, the registry, when it was read) for the board in args.
+async def _fleet_host(state: State, args: dict) -> tuple[Board, BoardId, dict, list[dict], Entry]:
+    """(board, its welland Pi, the Pi's registry entry, the registry, its cache entry) for the board in args.
 
     A Tiny Tapeout board resolves to the Pi its live board page names; ps1 has no fleet pages.
     """
@@ -677,7 +678,7 @@ async def _fleet_host(state: State, args: dict) -> tuple[Board, BoardId, dict, l
     entry = _chosen(machines).get(host.name)
     if entry is None or not isinstance(entry.get("serial"), str) or not entry["serial"]:
         raise BrokerError("bad_board", f"welland's registry has no serial for {host}; use list_boards")
-    return board, host, entry, machines, _short(read.as_of.isoformat())
+    return board, host, entry, machines, read
 
 
 def _fleet_head(board: Board, host: BoardId) -> dict:
@@ -694,7 +695,7 @@ async def op_fleet_details(state: State, args: dict, conn: Conn) -> dict:
         raise BrokerError("bad_request", str(e)) from e
     limit = _int(args, "limit", fleet.DEFAULT_LIMIT, 1, MAX_PAGE)
     offset = _int(args, "offset", 0, 0, 1_000_000)
-    board, host, entry, machines, registry_as_of = await _fleet_host(state, args)
+    board, host, entry, machines, registry = await _fleet_host(state, args)
     serial = entry["serial"]
     head = _fleet_head(board, host)
     try:
@@ -704,16 +705,26 @@ async def op_fleet_details(state: State, args: dict, conn: Conn) -> dict:
             raise BrokerError(
                 "site_unavailable", f"cannot read welland's page of {host}: {e}; try again in a minute"
             ) from e
-        # A site without machine.json yet: the registry entry, its switch port row and the page link.
-        port, port_error = None, None
+        if fleet.NOT_REGISTERED in str(e):  # the site has machine.json but not this Pi
+            raise BrokerError(
+                "not_registered",
+                f"welland says {host} (serial {serial}) is not registered: no host with this serial has "
+                f"registered, though the registry still lists it; list_boards shows its condition, and the page "
+                f"{fleet.PAGE_URL.format(serial=serial)} what the site knows",
+            ) from e
+        # Any other 404: a site without machine.json yet. The registry entry, its switch row and the page.
+        port, port_error, stale = None, None, registry.stale
         if "switch_port" in sections:
             try:
-                switches, _ = await state.sites.welland_switches()
+                switches, read = await state.sites.welland_switches()
                 port = fleet.find_port(switches, serial, host.name)
+                stale = stale or read.stale
             except SiteError as e2:
                 port_error = f"cannot read welland's switches: {e2}"
         data = fleet.fallback(entry, port, port_error)
-        head["as_of"] = registry_as_of
+        head["as_of"] = _short(registry.as_of.isoformat())
+        if stale:
+            head["stale"] = True
     else:
         if cached.stale:
             head["stale"] = True
@@ -748,13 +759,16 @@ async def op_switch_ports(state: State, args: dict, conn: Conn) -> dict:
     offset = _int(args, "offset", 0, 0, 1_000_000)
     head: dict = {}
     target = None
+    registry_stale = False
     if _str(args, "board") is not None:
-        board, host, entry, machines, _ = await _fleet_host(state, args)
+        board, host, entry, machines, registry = await _fleet_host(state, args)
         head = _fleet_head(board, host)
         target = (entry["serial"], host.name)
+        registry_stale = registry.stale
     else:
         try:
-            machines, _ = await state.sites.welland_registry()
+            machines, registry = await state.sites.welland_registry()
+            registry_stale = registry.stale
         except SiteError:
             machines = []  # only the host names of the machines column are lost: they show as serials
     try:
@@ -762,7 +776,7 @@ async def op_switch_ports(state: State, args: dict, conn: Conn) -> dict:
     except SiteError as e:
         raise BrokerError("site_unavailable", f"cannot read welland's switches: {e}; try again in a minute") from e
     head["as_of"] = _short(cached.as_of.isoformat())
-    if cached.stale:
+    if cached.stale or registry_stale:
         head["stale"] = True
     try:
         return fleet.switch_ports(

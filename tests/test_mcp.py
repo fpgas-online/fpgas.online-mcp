@@ -6,6 +6,7 @@ command locally), and the in-use check and power cycle are stubs: no board is to
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import os
 import shutil
@@ -896,7 +897,7 @@ async def test_fleet_details_paging(stack):
 
 
 async def test_fleet_details_falls_back_when_the_site_has_no_machine_json(stack):
-    stack.site.override[MACHINE_PATH] = httpx.Response(404, json={"error": "no host with this serial has registered"})
+    stack.site.override[MACHINE_PATH] = httpx.Response(404, text="<html><h1>Not Found</h1></html>")
     async with stack.session() as c:
         result = await call(c, "fleet_details", board=WELLAND, sections=["all"])
         details = ok(result, 8192)
@@ -971,3 +972,35 @@ async def test_list_boards_welland_note_points_at_fleet_details(stack):
     async with stack.session() as c:
         listed = ok(await call(c, "list_boards", site="welland"), 8192)
     assert "fleet_details" in listed["sites"]["welland"]["note"]
+
+
+async def test_fleet_details_of_a_pi_the_site_says_is_not_registered(stack):
+    stack.site.override[MACHINE_PATH] = httpx.Response(404, json={"error": "no host with this serial has registered"})
+    async with stack.session() as c:
+        text = err(await call(c, "fleet_details", board=WELLAND))
+    assert "not registered" in text and "00000000cc479fd1" in text and "newer site" not in text
+
+
+def stale_copy(read):
+    """Wrap a SiteClient read so it answers its data as a stale cached copy."""
+
+    async def stale(*a, **k):
+        data, entry = await read(*a, **k)
+        return data, dataclasses.replace(entry, stale=True)
+
+    return stale
+
+
+async def test_fallback_and_switch_ports_say_when_a_source_is_stale(stack, monkeypatch):
+    stack.site.override[MACHINE_PATH] = httpx.Response(404, text="Not Found")
+    sites = stack.state.sites
+    async with stack.session() as c:
+        assert "stale" not in ok(await call(c, "fleet_details", board=WELLAND), 8192)
+        assert "stale" not in ok(await call(c, "switch_ports"), 8192)
+        monkeypatch.setattr(sites, "welland_switches", stale_copy(sites.welland_switches))
+        assert ok(await call(c, "fleet_details", board=WELLAND), 8192)["stale"] is True
+        assert ok(await call(c, "switch_ports"), 8192)["stale"] is True
+        monkeypatch.undo()
+        monkeypatch.setattr(sites, "welland_registry", stale_copy(sites.welland_registry))
+        assert ok(await call(c, "fleet_details", board=WELLAND), 8192)["stale"] is True
+        assert ok(await call(c, "switch_ports"), 8192)["stale"] is True

@@ -52,6 +52,7 @@ PORT_COLUMNS = [
 ]
 SWITCH_KEYS = ("index", "name", "model", "status", "read_at", "known_issues", "empty_ports")
 PAGE_URL = "https://welland.fpgas.online/fleet/{serial}/"
+NOT_REGISTERED = "no host with this serial has registered"  # machine.json's 404 for a serial it does not know
 
 
 def _compact(obj) -> str:
