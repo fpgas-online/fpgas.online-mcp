@@ -1,13 +1,18 @@
 """Power cycle: toggle a board's PoE port through the site and wait until the host really rebooted.
 
-The only destructive tool. Order: fresh in-use check (refuse unless idle) -> record the boot to
-replace (refuse if unreadable) -> close the ssh master (a Tiny Tapeout board's: its Pi's, when the
-board page names one) -> toggle (no retry on 429) -> poll every
-10 s for up to 300 s. A board is back only when its boot id changed (Tiny Tapeout: `uptime_s`
-smaller than the time since the toggle) and it answers. Empty or null values never count.
+The only destructive tool. Order: fresh in-use check (refuse unless idle; "in use" always refuses,
+"unknown" only goes on under the claim's `override_reason`) -> record the boot to replace (refuse if
+unreadable, unless the check read unknown under the override: a hung board has no boot to read) ->
+close the ssh master (a Tiny Tapeout board's: its Pi's, when the board page names one) -> toggle (no
+retry on 429) -> poll every 10 s for up to 300 s. A board is back only when its boot id changed
+(Tiny Tapeout: `uptime_s` smaller than the time since the toggle) and it answers. With no old boot
+id, a welland or ps1 host is back only when its boot id and `/proc/uptime` come in one probe and the
+uptime is smaller than the time since the toggle: never "it answers" alone. Empty or null values
+never count.
 """
 
 import asyncio
+import math
 import re
 import time
 from collections.abc import Callable
@@ -22,6 +27,7 @@ from .ssh import RUN_SLACK_S
 POLL_S = 10.0
 GIVE_UP_S = 300.0
 BOOT_ID_COMMAND = "cat /proc/sys/kernel/random/boot_id"
+BOOT_UPTIME_COMMAND = "cat /proc/sys/kernel/random/boot_id /proc/uptime"
 BOOT_ID_TIMEOUT_S = 20.0
 MAX_ERROR_LEN = 300
 
@@ -31,6 +37,15 @@ NOT_POE = (
 )
 CANCELLED = "cancelled (or the claim ended) before the toggle; nothing was toggled"
 NO_RETURN = "the board did not come back within 5 minutes: do not cycle it again, ask the user"
+NO_FRESH_BOOT = (
+    "the board answers but has not restarted since the toggle (its uptime is older than the toggle) after 5 "
+    "minutes: do not cycle it again, ask the user"
+)
+NO_OLD_STEP = "board not answering before the toggle: back means it answers with a boot younger than the toggle"
+UNKNOWN_HINT = (
+    ". If the board is down and only if the user agrees, release this claim and claim it again with "
+    "override_reason saying why; power_cycle then goes ahead on an unknown verdict (never on in use)"
+)
 
 _BOOT_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
 
@@ -64,6 +79,33 @@ async def _ssh_boot_id(
     if r.exit_status != 0 or r.timed_out or r.truncated:
         return None
     return _valid_boot_id(r.output)
+
+
+def _uptime(text: str) -> float | None:
+    """The first field of /proc/uptime when it is a finite, non-negative number, else None."""
+    fields = text.split()
+    try:
+        value = float(fields[0]) if fields else math.nan
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+async def _ssh_boot_and_uptime(
+    ssh, board: Board, timeout_s: float, allow_unoffered: bool
+) -> tuple[str | None, float | None]:
+    """(boot id, /proc/uptime seconds) from one probe; either is None when unreadable."""
+    try:
+        r = await ssh.run(board.id, BOOT_UPTIME_COMMAND, timeout_s, allow_unoffered=allow_unoffered)
+    except Exception:  # noqa: BLE001 - a host that is rebooting fails in many ways
+        return None, None
+    if r.exit_status != 0 or r.timed_out or r.truncated:
+        return None, None
+    lines = (r.output or "").splitlines()
+    if len(lines) != 2:
+        return None, None
+    boot = _valid_boot_id(lines[0])
+    return boot, _uptime(lines[1]) if boot else None
 
 
 async def _registry_boot_id(board: Board, sites) -> str | None:
@@ -132,14 +174,21 @@ async def power_cycle(
     allow = claim.allow_unoffered
 
     verdict = await inuse_check(board, ssh, sites, claim, clock=clock, sleep=sleep, allow_unoffered=allow)
-    if verdict.verdict != "idle":
+    overridable = (claim.override_reason or "").strip() != "" and not verdict.not_offered
+    # Only an unknown verdict can be overridden, never "in use" (nor anything unexpected).
+    on_override = verdict.verdict == "unknown" and overridable
+    if verdict.verdict != "idle" and not on_override:
         signals = "; ".join(verdict.signals)
         steps.append(f"in-use check: {verdict.verdict}")
+        hint = UNKNOWN_HINT if verdict.verdict == "unknown" and not verdict.not_offered else ""
         return _refuse(
-            f"not cycling: the in-use check says {verdict.verdict}" + (f" ({signals})" if signals else ""),
+            f"not cycling: the in-use check says {verdict.verdict}" + (f" ({signals})" if signals else "") + hint,
             steps,
         )
-    steps.append("in-use check: idle")
+    if on_override:
+        steps.append(f"in-use check: unknown; going ahead on the claim's override ({claim.override_reason})")
+    else:
+        steps.append("in-use check: idle")
 
     try:
         target = await _toggle_args(board, sites)
@@ -164,11 +213,15 @@ async def power_cycle(
             old_id = await _registry_boot_id(board, sites)
             by_registry = old_id is not None
         ok = old_id is not None
-    if not ok:
+    no_old = not ok
+    if no_old and not on_override:
         return _refuse(
             "not cycling: could not read the board's current boot id, so a reboot could not be proven", steps
         )
-    steps.append("boot id read" if not is_tt else f"daemon uptime read: {old_uptime:.0f} s")
+    if no_old:
+        steps.append(NO_OLD_STEP)
+    else:
+        steps.append("boot id read" if not is_tt else f"daemon uptime read: {old_uptime:.0f} s")
     if by_registry:
         steps.append("boot id from the registry (ssh failed)")
 
@@ -217,12 +270,20 @@ async def power_cycle(
         else:
             # ssh.run waits RUN_SLACK_S past the remote timeout: keep the whole probe inside the cap.
             probe_s = max(1.0, min(BOOT_ID_TIMEOUT_S, remaining - RUN_SLACK_S))
-            new_id = await _ssh_boot_id(ssh, board, probe_s, allow)
-            if by_registry:
+            if no_old:
+                # The uptime is read during the probe, so the time since the toggle at its start is the
+                # strictest bound: a boot younger than that began after the toggle.
+                since = clock() - t_toggle
+                new_id, up = await _ssh_boot_and_uptime(ssh, board, probe_s, allow)
+                back = new_id is not None and up is not None and up < since
+                answered_same = new_id is not None and not back
+            elif by_registry:
+                new_id = await _ssh_boot_id(ssh, board, probe_s, allow)
                 reg = await _registry_boot_id(board, sites)
                 back = new_id is not None and reg is not None and reg != old_id
                 answered_same = new_id is not None and not back
             else:
+                new_id = await _ssh_boot_id(ssh, board, probe_s, allow)
                 back = new_id is not None and new_id != old_id
                 answered_same = new_id is not None and not back
         if back:
@@ -240,4 +301,8 @@ async def power_cycle(
             "restart: wait at least 60 s and check the board before trying again",
             steps,
         )
-    return CycleResult(False, None, NOT_POE if answered_same else NO_RETURN, None, steps)
+    if not answered_same:
+        return _refuse(NO_RETURN, steps)
+    # With no old boot, a board that answers with an old one may simply have been up all along: the
+    # not-PoE diagnosis needs the old boot it kept.
+    return _refuse(NO_FRESH_BOOT if no_old else NOT_POE, steps)
