@@ -46,8 +46,9 @@ def idle(*a, **k):
 
 
 class Sites:
-    def __init__(self, clock, toggle=None, boot=OLD, tt=None, page=None, order=None):
+    def __init__(self, clock, toggle=None, boot=OLD, tt=None, page=None, order=None, tt_s=0.0):
         self.clock, self.calls, self.boot = clock, [], boot  # boot: str, or callable(now, toggled_at)
+        self.tt_s = tt_s  # seconds a status.json fetch takes (the status is read at its end)
         self.order = order if order is not None else []
         self.page_live = []
         self._toggle = toggle or ToggleResult(200, {"2": ["off", "on"]}, None)
@@ -63,6 +64,7 @@ class Sites:
 
     async def tt_status(self, slug, live=False):
         assert live
+        self.clock.t += self.tt_s
         return self.tt(self.clock.t), ENTRY
 
     async def board_page(self, site, name, live=False):
@@ -82,9 +84,10 @@ class Ssh:
     """`answers(now, toggled_at)` gives the stdout of a boot-id read, or None to fail. `uptime(now,
     toggled_at)` gives the host's /proc/uptime seconds for the combined probe (None: no uptime line)."""
 
-    def __init__(self, clock, sites, answers, uptime=None):
+    def __init__(self, clock, sites, answers, uptime=None, run_s=0.0):
         self.clock, self.sites, self.answers, self.exits, self.runs = clock, sites, answers, 0, 0
         self.uptime = uptime
+        self.run_s = run_s  # seconds a probe takes (the host is read at its end)
         self.timeouts = []
         self.exited = []
         self.allow = []  # allow_unoffered of each run
@@ -101,6 +104,7 @@ class Ssh:
         self.allow.append(allow_unoffered)
         self.runs += 1
         self.timeouts.append((self.clock.t, timeout_s))
+        self.clock.t += self.run_s
         out = self.answers(self.clock.t, self.sites.toggled_at)
         if out is None:
             raise OSError("connection refused")
@@ -670,3 +674,118 @@ async def test_an_override_given_for_another_verdict_does_not_cycle_an_unknown_b
     assert "in-use check says unknown" in r.message and "release this claim" in r.message
     assert f'override was given for "{at_claim or "an unrecorded verdict"}"' in r.message
     assert "user" in r.message and r.steps == ["in-use check: unknown"]
+
+
+# --- review fixes: the registry fallback, the probe-start bound, parsing, texts --------------------
+
+
+async def test_registry_fallback_back_when_the_registry_updates_and_ssh_answers():
+    clock = Clock()
+    sites = Sites(clock, boot=lambda n, t: OLD if t is None or n - t < 40 else NEW)
+    ssh = Ssh(clock, sites, dead_until(60), uptime=lambda n, t: 9000.0 + n)  # an odd uptime: the id decides
+    r = await run(board(), sites, ssh, clock, unknown, claim=overridden())
+    assert r.ok and r.seconds_to_back == 60 and "boot id from the registry (ssh failed)" in r.steps
+    assert set(ssh.commands[1:]) == {power.BOOT_UPTIME_COMMAND}
+
+
+async def test_registry_fallback_back_on_a_fresh_uptime_when_the_registry_never_updates():
+    clock = Clock()
+    sites = Sites(clock)  # the registry shows OLD as the current boot throughout
+    ssh = Ssh(clock, sites, dead_until(60), uptime=booted_at(30))
+    r = await run(board(), sites, ssh, clock, unknown, claim=overridden())
+    assert r.ok and r.seconds_to_back == 60
+
+
+async def test_registry_fallback_answering_with_an_old_uptime_is_not_poe():
+    clock = Clock()
+    sites = Sites(clock)
+    ssh = Ssh(clock, sites, dead_until(20), uptime=lambda n, t: 9000.0 + n)
+    r = await run(board(), sites, ssh, clock)
+    assert not r.ok and r.message == power.NOT_POE
+
+
+async def test_registry_fallback_with_no_answer_did_not_come_back():
+    clock = Clock()
+    sites = Sites(clock)
+    r = await run(board(), sites, Ssh(clock, sites, lambda n, t: None), clock, unknown, claim=overridden())
+    assert not r.ok and r.message == power.NO_RETURN
+
+
+async def test_registry_fallback_answering_with_an_unreadable_uptime_is_not_back():
+    clock = Clock()
+    sites = Sites(clock)
+    ssh = Ssh(clock, sites, dead_until(20), uptime=lambda n, t: None)
+    r = await run(board(), sites, ssh, clock)
+    assert not r.ok and r.message == power.NO_RETURN
+
+
+async def test_no_old_boot_uses_the_time_since_the_toggle_at_the_start_of_the_probe():
+    clock = Clock()
+    sites = Sites(clock, boot="")
+    # each probe takes 5 s; the host booted 2 s after the toggle, so its uptime read at the end of a probe
+    # is 3 s above the time since the toggle at its start (and below that at its end): never proven
+    ssh = Ssh(clock, sites, dead_until(0), uptime=booted_at(2), run_s=5.0)
+    r = await run(board(), sites, ssh, clock, unknown, claim=overridden())
+    assert not r.ok
+    clock = Clock()
+    sites = Sites(clock, boot="")
+    ssh = Ssh(clock, sites, dead_until(60), uptime=booted_at(30), run_s=5.0)
+    r = await run(board(), sites, ssh, clock, unknown, claim=overridden())
+    assert r.ok and r.seconds_to_back == 60  # probes start at +10, +25, +40, +55; the last ends at +60
+
+
+async def test_tt_no_old_value_uses_the_time_since_the_toggle_before_the_status_fetch():
+    clock = Clock()
+    sites = Sites(clock, tt_s=5.0)
+    sites.tt = tt_down_then(2)(sites)  # restarted 2 s after the toggle: within a fetch's 5 s
+    ssh = Ssh(clock, sites, lambda n, t: None)
+    r = await run(board("tinytapeout", "fpga-2"), sites, ssh, clock, unknown, claim=overridden(TT_CLAIM))
+    assert not r.ok and r.message == power.NO_FRESH_BOOT
+    clock = Clock()
+    sites = Sites(clock, tt_s=5.0)
+    sites.tt = tt_down_then(12)(sites)
+    r = await run(board("tinytapeout", "fpga-2"), sites, ssh, clock, unknown, claim=overridden(TT_CLAIM))
+    assert r.ok
+
+
+async def test_tt_with_an_old_value_keeps_the_time_after_the_fetch():
+    clock = Clock()
+    sites = Sites(clock, tt_s=5.0)
+    sites.tt = lambda now: (
+        tt_status(None)(now) if sites.toggled_at is None else tt_status(sites.toggled_at - 1000 + 2)(now)
+    )
+    r = await run(board("tinytapeout", "fpga-2"), sites, Ssh(clock, sites, lambda n, t: None), clock)
+    assert r.ok  # unchanged: the existing test compares with the time after the fetch
+
+
+@pytest.mark.parametrize(
+    ("out", "back"),
+    [
+        (f"Welcome to the Pi\n{NEW}\n5.00 1.00\n", False),  # a banner line first: three lines
+        ("not-a-boot-id\n5.00 1.00\n", False),
+        (f"{NEW}\r\n5.00 1.00\r\n", True),  # CRLF output still parses
+        (f"{NEW}\n5.00 1.00\n", True),
+    ],
+)
+async def test_boot_and_uptime_probe_parsing(out, back):
+    clock = Clock()
+    sites = Sites(clock, boot="")
+    ssh = Ssh(clock, sites, lambda n, t: None if t is None else RunResult(0, out, False, False))
+    r = await run(board(), sites, ssh, clock, unknown, claim=overridden())
+    assert r.ok is back
+
+
+def test_no_fresh_boot_text():
+    assert power.NO_FRESH_BOOT == (
+        "after 5 minutes the board answers but has not restarted since the toggle (its uptime is older than the "
+        "toggle): do not cycle it again, ask the user"
+    )
+
+
+async def test_override_reason_in_the_steps_is_cleaned_and_capped():
+    clock = Clock()
+    sites = Sites(clock)
+    reason = "a\x1b[31m\x07b\nc" + "x" * 300
+    r = await run(board(), sites, Ssh(clock, sites, reboot_after(20)), clock, unknown, overridden(reason=reason))
+    step = r.steps[0]
+    assert step == "in-use check: unknown; going ahead on the claim's override (ab c" + "x" * 196 + ")"
