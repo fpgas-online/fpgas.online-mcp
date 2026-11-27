@@ -1,6 +1,6 @@
 A=fo-ps1-pi3      # or fo-welland-pi-sw1-p2
 ssh "$A" sh -s <<'EOF'
-now=$(date +%s); win=900; tmux_win=300; unknown=
+now=$(date +%s); win=300; unknown=
 for c in ss tmux who find awk ps sort date; do
   command -v "$c" > /dev/null || { printf 'missing tool on host: %s\n' "$c"; unknown=1; }
 done
@@ -24,10 +24,10 @@ tmin=$(printf '%s\n' "$t" | awk -v now="$now" 'NF { i=now-$1; if (m=="" || i<m) 
 # a job left running in a tmux window (a build started in the web terminal) has no sshd parent:
 # a window is busy when its process has a child (a command, a script, a `job &`) or is itself not
 # a shell or the help window's tail. It counts while its session had a key press in the last
-# $tmux_win s (#{session_activity}: key presses and attaching move it, output does not), or when
+# $win s (#{session_activity}: key presses and attaching move it, output does not), or when
 # tmux gives no such time; otherwise it is listed as idle with the minutes since the last key press
 pp=$(tmux list-panes -a -F '#{pane_pid} #{session_activity} #{pane_current_command}' 2>&1) || pp=
-pw=$( { printf '%s\n' "$pp" | awk 'NF { print "P", $0 }'; ps -A -o ppid=,args=; } | awk -v now="$now" -v win="$tmux_win" '
+pw=$( { printf '%s\n' "$pp" | awk 'NF { print "P", $0 }'; ps -A -o ppid=,args=; } | awk -v now="$now" -v win="$win" '
   $1 == "P" { if ($2 !~ /^[0-9]+$/) next
               p=$2; a="?"; if (NF > 3 && $3 ~ /^[0-9]+$/ && $3 > 0) a=$3
               if (NF > 3) cmd[p]=$4; else cmd[p]=$3
@@ -43,7 +43,7 @@ pb=$(printf '%s\n' "$pw" | awk 'sub(/^B/, "")')
 pq=$(printf '%s\n' "$pw" | awk 'sub(/^I/, "")')
 echo "tmux windows running a program:"
 [ -n "$pb" ] && printf '%s\n' "$pb"
-printf 'tmux windows running a program, idle (no key press for %s s):\n' "$tmux_win"
+printf 'tmux windows running a program, idle (no key press for %s s):\n' "$win"
 [ -n "$pq" ] && printf '%s\n' "$pq"
 
 # terminal logins: find the pts/N field, then the idle field (the last one that looks like
@@ -68,7 +68,7 @@ printf 'newest change in ~/Uploads: %s s ago\n' "${umin:-none}"
 
 # commands running for other ssh logins (an agent's `ssh host 'flash...'`): any process that
 # is a direct child of an sshd login other than yours, apart from tmux (counted above) and
-# sftp-server older than 15 min (an idle file-transfer session, not a running command)
+# sftp-server older than 5 min (an idle file-transfer session, not a running command)
 echo "commands running for other logins:"
 procs=$(ps -u "$(id -u)" -o pid=,ppid=,etimes=,args= | awk -v me="$$" -v win="$win" '
   { pid=$1; ppid[pid]=$2; et[pid]=$3; a=$0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ +/,"",a); args[pid]=a }
@@ -82,7 +82,7 @@ if [ "$procs" = "?" ]; then echo "  could not find your own login in the process
 others=$(printf '%s\n' "$procs" | awk 'NF { n++ } END { print n+0 }')
 
 verdict=idle
-if [ -n "$tmin" ] && [ "$tmin" -lt "$tmux_win" ]; then verdict="in use"; printf 'active: tmux client, %s s ago\n' "$tmin"; fi
+if [ -n "$tmin" ] && [ "$tmin" -lt "$win" ]; then verdict="in use"; printf 'active: tmux client, %s s ago\n' "$tmin"; fi
 for kv in "ssh terminal:$wmin" "~/Uploads change:$umin"; do
   v=${kv#*:}
   if [ -n "$v" ] && [ "$v" -lt "$win" ]; then verdict="in use"; printf 'active: %s, %s s ago\n' "${kv%%:*}" "$v"; fi

@@ -249,19 +249,21 @@ def test_idle_program_does_not_hide_a_recent_client(scratch, awk):
     assert "board says: tmux window pid 100 (minicom): no key press for 18 min: minicom" in signals
 
 
-# --- unchanged: ssh terminals and ~/Uploads at 15 minutes, other logins always -----------------------
+# --- ssh terminals and ~/Uploads: the same 5 minutes; other logins always ---------------------------
 
 WHO = "pi       pts/1        2026-11-27 10:00 {idle}        4321 (9.9.9.9)\n"
 
 
-@pytest.mark.parametrize(("idle", "active"), [("00:10", True), ("00:14", True), ("00:15", False), ("01:02", False)])
-def test_ssh_terminal_stays_at_900s(scratch, awk, idle, active):
+@pytest.mark.parametrize(
+    ("idle", "active"), [("00:00", True), ("00:04", True), ("00:05", False), ("00:14", False), ("01:02", False)]
+)
+def test_ssh_terminal_at_300s(scratch, awk, idle, active):
     out = run_script(scratch, awk, who=WHO.replace("{idle}", idle))
     assert ("active: ssh terminal" in out) == active, out
 
 
-@pytest.mark.parametrize(("age", "active"), [(600, True), (899, True), (901, False)])
-def test_uploads_stays_at_900s(scratch, awk, age, active):
+@pytest.mark.parametrize(("age", "active"), [(200, True), (299, True), (301, False), (600, False)])
+def test_uploads_at_300s(scratch, awk, age, active):
     out = run_script(scratch, awk, uploads_age_s=age)
     assert ("active: ~/Uploads change" in out) == active, out
 
@@ -271,3 +273,11 @@ def test_command_for_another_login_is_always_in_use(scratch, awk):
     out = run_script(scratch, awk, ps_u=other)
     assert "  pid 7001, running 86000 s: minicom -D /dev/ttyUSB1" in out, out
     assert "active: 1 command(s) running for another login" in out and verdict_of(out) == "verdict: in use"
+
+
+@pytest.mark.parametrize(("age", "counted"), [(299, True), (300, False), (5000, False)])
+def test_sftp_server_counts_for_5_minutes(scratch, awk, age, counted):
+    """An sftp-server older than the same 5 minutes is an idle file-transfer session, not a command."""
+    other = f"7000 1 90000 sshd-session: pi@notty\n7001 7000 {age} /usr/lib/openssh/sftp-server\n"
+    out = run_script(scratch, awk, ps_u=other)
+    assert ("running for another login" in out and "active:" in out) == counted, out
