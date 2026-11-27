@@ -172,6 +172,7 @@ async def test_file_format_and_modes(store, tmp_path):
         "tt_state_at_claim": None,
         "host": None,
         "allow_unoffered": False,
+        "verdict_at_claim": None,
     }
     assert sorted(p.name for p in d.iterdir()) == [".lock", "welland_sw1-p1.json"]
 
@@ -398,3 +399,26 @@ async def test_old_or_odd_claim_file_reads_allow_unoffered_false(store, tmp_path
         data["allow_unoffered"] = value
     path.write_text(json.dumps(data))
     assert store.get(c.claim_id).allow_unoffered is False
+
+
+async def test_verdict_at_claim_stored_read_back_and_kept_on_renewal(store, tmp_path, clock):
+    c = await store.claim(BOARD, 30, "x", "a@h", override_reason="down", verdict_at_claim="unknown")
+    assert c.verdict_at_claim == "unknown"
+    path = tmp_path / "claims" / "welland_sw1-p1.json"
+    assert json.loads(path.read_text())["verdict_at_claim"] == "unknown"
+    assert ClaimStore(tmp_path, clock).get(c.claim_id).verdict_at_claim == "unknown"  # another broker reads it
+    r = await store.claim(BOARD, 60, "y", "a@h", claim_id=c.claim_id, verdict_at_claim="idle")
+    assert r.verdict_at_claim == "unknown"  # a renewal keeps the stored verdict (it skips the check)
+
+
+@pytest.mark.parametrize("value", [None, "busy", 1, "missing"])
+async def test_old_or_odd_claim_file_reads_verdict_at_claim_none(store, tmp_path, value):
+    c = await store.claim(BOARD, 30, "x", "a@h", verdict_at_claim="unknown")
+    path = tmp_path / "claims" / "welland_sw1-p1.json"
+    data = json.loads(path.read_text())
+    if value == "missing":
+        del data["verdict_at_claim"]
+    else:
+        data["verdict_at_claim"] = value
+    path.write_text(json.dumps(data))
+    assert store.get(c.claim_id).verdict_at_claim is None

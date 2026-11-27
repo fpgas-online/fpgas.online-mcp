@@ -54,6 +54,13 @@ DEFAULT_MINUTES = 30
 MAX_MINUTES = 240
 
 
+VERDICTS = ("idle", "in use", "unknown")
+
+
+def _verdict_or_none(value) -> str | None:
+    return value if value in VERDICTS else None
+
+
 @dataclass(frozen=True)
 class Claim:
     claim_id: str
@@ -66,6 +73,9 @@ class Claim:
     tt_state_at_claim: str | None = None
     host: str | None = None
     allow_unoffered: bool = False  # set at claim time (with its in-use check); connect/run/power_cycle use it
+    # the in-use verdict the claim was taken on (None: a renewal-only or older claim file): power_cycle
+    # honours override_reason on an unknown verdict only when the override was given for unknown
+    verdict_at_claim: str | None = None
     holder_connected: bool = False  # in memory only, not persisted
 
     @property
@@ -161,6 +171,7 @@ class ClaimStore:
             "tt_state_at_claim": claim.tt_state_at_claim,
             "host": claim.host,
             "allow_unoffered": claim.allow_unoffered,
+            "verdict_at_claim": claim.verdict_at_claim,
         }
         fd, tmp = tempfile.mkstemp(dir=self._dir, prefix=".claim-", suffix=".tmp")
         try:
@@ -188,6 +199,7 @@ class ClaimStore:
                 tt_state_at_claim=d.get("tt_state_at_claim"),
                 host=d.get("host"),
                 allow_unoffered=d.get("allow_unoffered") is True,
+                verdict_at_claim=_verdict_or_none(d.get("verdict_at_claim")),
             )
         except FileNotFoundError:
             return None
@@ -268,10 +280,12 @@ class ClaimStore:
         tt_state_at_claim: str | None = None,
         host: str | None = None,
         allow_unoffered: bool = False,
+        verdict_at_claim: str | None = None,
     ) -> Claim:
         """Claim board, or renew claim_id. `host`: the Pi the board is plugged into; `allow_unoffered`:
-        the board may be reached although its site does not offer it. Both for new claims only: a
-        renewal keeps the stored ones (it skips the in-use check, so it must not widen the claim)."""
+        the board may be reached although its site does not offer it; `verdict_at_claim`: the in-use
+        verdict the claim is taken on. All for new claims only: a renewal keeps the stored ones (it
+        skips the in-use check, so it must not widen the claim)."""
         minutes = DEFAULT_MINUTES if minutes is None else minutes
         if not 1 <= minutes <= MAX_MINUTES:
             raise ValueError(f"minutes must be between 1 and {MAX_MINUTES}, got {minutes}")
@@ -311,6 +325,7 @@ class ClaimStore:
                     tt_state_at_claim=tt_state_at_claim,
                     host=host,
                     allow_unoffered=allow_unoffered,
+                    verdict_at_claim=_verdict_or_none(verdict_at_claim),
                     holder_connected=holder in self._connected,
                 )
             self._write(claim)

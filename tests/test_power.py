@@ -433,8 +433,8 @@ def verdict_of(v, signals=("ssh: No route to host",), not_offered=False):
 unknown = verdict_of("unknown")
 
 
-def overridden(claim=CLAIM, reason=REASON):
-    return replace(claim, override_reason=reason)
+def overridden(claim=CLAIM, reason=REASON, at_claim="unknown"):
+    return replace(claim, override_reason=reason, verdict_at_claim=at_claim)
 
 
 def booted_at(delay):
@@ -658,3 +658,15 @@ async def test_override_with_no_old_boot_still_stops_before_the_toggle():
         board(), overridden(), sites, ssh, clock=clock, sleep=clock.sleep, inuse_check=unknown, should_stop=lambda: True
     )
     assert not r.ok and r.message == power.CANCELLED and sites.calls == [] and ssh.exits == 0
+
+
+@pytest.mark.parametrize("at_claim", ["in use", "idle", None])
+async def test_an_override_given_for_another_verdict_does_not_cycle_an_unknown_board(at_claim):
+    clock = Clock()
+    sites = Sites(clock, boot="")
+    ssh = Ssh(clock, sites, dead_until(60), uptime=booted_at(30))
+    r = await run(board(), sites, ssh, clock, unknown, claim=overridden(at_claim=at_claim))
+    assert not r.ok and sites.calls == [] and ssh.exits == 0
+    assert "in-use check says unknown" in r.message and "release this claim" in r.message
+    assert f'override was given for "{at_claim or "an unrecorded verdict"}"' in r.message
+    assert "user" in r.message and r.steps == ["in-use check: unknown"]

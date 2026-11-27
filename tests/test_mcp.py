@@ -329,6 +329,7 @@ async def test_claim_refused_when_in_use_then_override(stack):
         assert stack.state.claims.for_board(WELLAND) is None
         claim = ok(await call(c, "claim_board", board=WELLAND, purpose="blink", override_reason="Tim said so"))
         assert claim["override_reason"] == "Tim said so" and claim["in_use"]["verdict"] == "in use"
+        assert stack.state.claims.get(claim["claim_id"]).verdict_at_claim == "in use"
     async with stack.session("other:2@host") as other:
         listed = ok(await call(other, "list_boards", site="welland"))
         mine = listed["claims"][WELLAND]

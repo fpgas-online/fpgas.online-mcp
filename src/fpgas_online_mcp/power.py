@@ -41,6 +41,10 @@ NO_FRESH_BOOT = (
     "the board answers but has not restarted since the toggle (its uptime is older than the toggle) after 5 "
     "minutes: do not cycle it again, ask the user"
 )
+OTHER_OVERRIDE_HINT = (
+    '. The claim\'s override was given for "{given}", not for unknown: release this claim, claim it again '
+    "(an override for unknown needs the user's agreement), then power_cycle"
+)
 NO_OLD_STEP = "board not answering before the toggle: back means it answers with a boot younger than the toggle"
 UNKNOWN_HINT = (
     ". If the board is down and only if the user agrees, release this claim and claim it again with "
@@ -174,13 +178,25 @@ async def power_cycle(
     allow = claim.allow_unoffered
 
     verdict = await inuse_check(board, ssh, sites, claim, clock=clock, sleep=sleep, allow_unoffered=allow)
-    overridable = (claim.override_reason or "").strip() != "" and not verdict.not_offered
-    # Only an unknown verdict can be overridden, never "in use" (nor anything unexpected).
-    on_override = verdict.verdict == "unknown" and overridable
+    has_override = (claim.override_reason or "").strip() != ""
+    # Only an unknown verdict can be overridden, never "in use" (nor anything unexpected), and only by an
+    # override the user gave for unknown: one given for "in use" or an idle claim does not stretch to it.
+    on_override = (
+        verdict.verdict == "unknown"
+        and has_override
+        and not verdict.not_offered
+        and claim.verdict_at_claim == "unknown"
+    )
     if verdict.verdict != "idle" and not on_override:
         signals = "; ".join(verdict.signals)
         steps.append(f"in-use check: {verdict.verdict}")
-        hint = UNKNOWN_HINT if verdict.verdict == "unknown" and not verdict.not_offered else ""
+        hint = ""
+        if verdict.verdict == "unknown" and not verdict.not_offered:
+            if has_override:
+                given = claim.verdict_at_claim or "an unrecorded verdict"
+                hint = OTHER_OVERRIDE_HINT.format(given=given)
+            else:
+                hint = UNKNOWN_HINT
         return _refuse(
             f"not cycling: the in-use check says {verdict.verdict}" + (f" ({signals})" if signals else "") + hint,
             steps,
