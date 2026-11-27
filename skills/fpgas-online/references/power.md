@@ -13,13 +13,16 @@ All commands send `-A fpgas-online-skill`. ssh setup (askpass, `fo-*` aliases): 
 ## A board that is down (hung)
 
 A board that does not answer reads `unknown` in the in-use check, and you cannot record its
-boot (step 2 below). With the MCP tools: claim it with `override_reason` (only when the user
-agrees; the reason is shown to everyone) and `power_cycle` cycles it. It never cycles a board
-that reads `in use`, override or not. With no boot recorded, the board is back only when it
-answers with a boot younger than the toggle: Tiny Tapeout, `uptime_s` smaller than the
-seconds since the toggle; welland and ps1, the host's uptime (`/proc/uptime`, first field)
-smaller than the seconds since the toggle, read over ssh together with its boot id. That it
-answers is never enough on its own. If it does not come back, see the last section: do not
+boot (step 2 below). With the MCP tools: claim it with `override_reason` while it reads
+`unknown` (only when the user agrees; the reason is shown to everyone) and `power_cycle`
+cycles it. An override given when the board read `in use`, or a claim taken while it was
+idle, does not cover it: release the claim and claim it again. It never cycles a board that
+reads `in use`, override or not. With no boot recorded, the board is back only when it
+answers with a boot younger than the toggle: Tiny Tapeout, `uptime_s` (the uptime of the
+daemon on the board's Pi, which restarts with the Pi) smaller than the seconds since the
+toggle; welland and ps1, the host's uptime (`/proc/uptime`, first field) smaller than the
+seconds since the toggle, read over ssh together with its boot id. That it answers is never
+enough on its own. If it does not come back, see the last section: do not
 cycle it again.
 
 By hand, the same check for welland or ps1 (`A` and `T0` as below):

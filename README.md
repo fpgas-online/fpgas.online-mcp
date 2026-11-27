@@ -75,9 +75,10 @@ verified), so expect only the HTTPS parts to work there.
 as in use.
 
 A board that is down (a hung Pi, say) reads `unknown`. To recover it, claim it
-with `override_reason` (only when the user agrees; the reason is shown to
-everyone) and `power_cycle` cycles it; a board that reads `in use` is never
-cycled, override or not. When the board's current boot cannot be read before the
+with `override_reason` while it reads `unknown` (only when the user agrees; the
+reason is shown to everyone) and `power_cycle` cycles it. An override given for
+`in use`, or a claim taken while the board was idle, does not cover it: claim it
+again. A board that reads `in use` is never cycled, override or not. When the board's current boot cannot be read before the
 toggle, it counts as back only when it answers with a boot younger than the
 toggle (Tiny Tapeout: `uptime_s`; welland and ps1: the host's `/proc/uptime`,
 read over ssh with its boot id), never because it merely answers.
