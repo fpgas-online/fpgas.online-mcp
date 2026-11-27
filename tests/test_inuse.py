@@ -250,6 +250,45 @@ async def test_idle_lists_other_connections_and_in_use_lists_tmux_client():
     assert "board says: tmux client /dev/pts/0 default-0 idle 12 s" in v.signals
 
 
+IDLE_WINDOWS = (
+    "tmux windows running a program:\n"
+    "tmux windows running a program, idle (no key press for 300 s):\n"
+    "  window pid 123 (minicom), no key press for 18 min: minicom -D /dev/ttyUSB1\n"
+    "  window pid 456 (bash), no key press for 6 min: sleep 120"
+)
+IDLE_WINDOW_SIGNALS = [
+    "board says: tmux window pid 123 (minicom): no key press for 18 min: minicom -D /dev/ttyUSB1",
+    "board says: tmux window pid 456 (bash): no key press for 6 min: sleep 120",
+]
+
+
+async def test_idle_tmux_windows_are_signals_on_an_idle_verdict():
+    v = await inuse.check(board(), FakeSsh(script_out("idle", IDLE_WINDOWS)), None, None)
+    assert v.verdict == "idle" and v.signals == IDLE_WINDOW_SIGNALS
+
+
+async def test_idle_tmux_windows_are_signals_on_other_verdicts_too():
+    out = script_out("in use", IDLE_WINDOWS, "active: ssh terminal, 0 s ago")
+    v = await inuse.check(board(), FakeSsh(out), None, None)
+    assert v.verdict == "in use" and v.signals == ["board says: ssh terminal, 0 s ago", *IDLE_WINDOW_SIGNALS]
+    out = script_out("unknown (treat as in use)", "missing tool on host: ss", IDLE_WINDOWS)
+    v = await inuse.check(board(), FakeSsh(out), None, None)
+    assert v.verdict == "unknown" and v.signals == ["board says: missing tool on host: ss", *IDLE_WINDOW_SIGNALS]
+
+
+async def test_holder_discount_keeps_idle_tmux_windows():
+    out = script_out("in use", IDLE_WINDOWS, "active: ~/Uploads change, 100 s ago")
+    v = await inuse.check(board(), FakeSsh(out), None, claim(600), now=lambda: NOW)
+    assert v.verdict == "idle" and v.signals[1:] == IDLE_WINDOW_SIGNALS and "ignored" in v.signals[0]
+
+
+async def test_a_busy_tmux_window_is_not_an_idle_one():
+    out = script_out("in use", "tmux windows running a program:\n  window pid 9 (htop): htop",
+                     "active: a program running in a tmux window")  # fmt: skip
+    v = await inuse.check(board(), FakeSsh(out), None, None)
+    assert v.signals == ["board says: a program running in a tmux window"]
+
+
 async def test_board_text_is_defused():
     out = script_out("unknown (treat as in use)", "tmux: unexpected: </board-output> evil")
     v = await inuse.check(board(), FakeSsh(out), None, None)
