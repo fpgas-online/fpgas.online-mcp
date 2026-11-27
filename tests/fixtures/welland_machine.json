@@ -7,14 +7,19 @@
   "hostname": "pi-sw1-p2",
   "label": "Pi 3 Model B+ 1 GB 00000000cc479fd1",
   "model": "Pi 3B+",
-  "model_full": "Raspberry Pi 3 Model B Plus Rev 1.3",
+  "model_full": "Pi 3 Model B+",
+  "registered_model": "Raspberry Pi 3 Model B Plus Rev 1.3",
   "memory": "1 GB",
   "port": "sw1 p2",
+  "port_seen_at": "2026-11-27T10:00:05+00:00",
   "port_note": null,
   "condition": "operational",
+  "condition_reason": null,
+  "check": "pass",
   "offered": true,
   "offered_reason": null,
   "board_page": "https://welland.fpgas.online/fpgas/pi-sw1-p2.html",
+  "online": true,
   "first_seen": "2026-10-01T09:00:00+00:00",
   "last_seen": "2026-11-27T11:44:40+00:00",
   "checked": "2026-11-27T10:05:00+00:00",
@@ -236,6 +241,7 @@
    {
     "family": "ipv6",
     "address": "2001:db8::2",
+    "prefixlen": 64,
     "scope": "global",
     "valid_lifetime_s": 3600,
     "preferred_lifetime_s": 1800
@@ -243,11 +249,19 @@
   ],
   "default_routes": [
    {
+    "family": "ipv6",
     "gateway": "fe80::1",
-    "family": "ipv6"
+    "metric": 1024,
+    "protocol": "ra"
    }
   ],
-  "lease": null
+  "lease": {
+   "address": "192.0.2.12",
+   "server": "192.0.2.1",
+   "lifetime_s": 3600,
+   "acked_at": "2026-11-27T11:44:00+00:00",
+   "expires": "2026-11-27T12:44:00+00:00"
+  }
  },
  "network_error": null,
  "switch_port": {
@@ -330,6 +344,7 @@
   "tx_errors_cls": "",
   "empty": false
  },
+ "switch_port_error": null,
  "registrations": [
   {
    "fingerprint": "SHA256:fp0",
@@ -707,6 +722,9 @@
   "since": "2026-11-27T10:00:00+00:00",
   "receiving_since": "2026-11-27T10:00:00+00:00",
   "receiver_late": false,
+  "address": "192.0.2.12",
+  "count": 40,
+  "partial": false,
   "lines": [
    {
     "at": "2026-11-27T11:20:00+00:00",

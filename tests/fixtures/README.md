@@ -11,7 +11,8 @@ Nothing was trimmed, except where the table says so.
 ports 1, 2, 10, 11, 14; switch 2 ports 2, 11, 42) and without the front-panel drawing fields;
 the port rows are whole, action fields included. `welland_machine.json` (pi-sw1-p2) and
 `welland_machine_tt.json` (pi-sw2-p11, the Pi of `tt-ab2a48a7ee008dd9`) are written by hand from
-the `/fleet/<serial>/machine.json` contract (docs/superpowers/specs/2026-11-27-fleet-and-switches-tools-design.md)
+the `/fleet/<serial>/machine.json` contract (docs/superpowers/specs/2026-11-27-fleet-and-switches-tools-design.md,
+with the fields the site added as built: `machine_json` in fpgas.online-site)
 before the site published it; their `switch_port` is that port's row from the switches fixture,
 addresses are documentation addresses, and the newest event is hostile text.
 
