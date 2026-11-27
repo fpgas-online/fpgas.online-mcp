@@ -53,10 +53,12 @@ def _number(value) -> float | None:
     return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
 
 
-async def _ssh_boot_id(ssh, board: Board, timeout_s: float = BOOT_ID_TIMEOUT_S) -> str | None:
+async def _ssh_boot_id(
+    ssh, board: Board, timeout_s: float = BOOT_ID_TIMEOUT_S, allow_unoffered: bool = False
+) -> str | None:
     """The host's boot id over ssh, or None on any failure (expected while it reboots)."""
     try:
-        r = await ssh.run(board.id, BOOT_ID_COMMAND, timeout_s)
+        r = await ssh.run(board.id, BOOT_ID_COMMAND, timeout_s, allow_unoffered=allow_unoffered)
     except Exception:  # noqa: BLE001 - a host that is rebooting fails in many ways
         return None
     if r.exit_status != 0 or r.timed_out or r.truncated:
@@ -121,11 +123,15 @@ async def power_cycle(
     should_stop: Callable[[], bool] = lambda: False,
 ) -> CycleResult:
     """`should_stop()` is asked just before the master is closed and just before the toggle: true (the
-    caller hung up, or the claim is no longer live) ends the cycle with nothing toggled."""
+    caller hung up, or the claim is no longer live) ends the cycle with nothing toggled.
+
+    The claim's `allow_unoffered` (never an argument) lets the check and the boot id reads reach a
+    welland Pi the site does not offer."""
     steps: list[str] = []
     is_tt = board.site == "tinytapeout"
+    allow = claim.allow_unoffered
 
-    verdict = await inuse_check(board, ssh, sites, claim, clock=clock, sleep=sleep)
+    verdict = await inuse_check(board, ssh, sites, claim, clock=clock, sleep=sleep, allow_unoffered=allow)
     if verdict.verdict != "idle":
         signals = "; ".join(verdict.signals)
         steps.append(f"in-use check: {verdict.verdict}")
@@ -153,7 +159,7 @@ async def power_cycle(
         ok = old_uptime is not None
     else:
         # Read over ssh (the in-use check just used the master) so old and new ids are like for like.
-        old_id = await _ssh_boot_id(ssh, board)
+        old_id = await _ssh_boot_id(ssh, board, allow_unoffered=allow)
         if old_id is None and board.site == "welland":
             old_id = await _registry_boot_id(board, sites)
             by_registry = old_id is not None
@@ -211,7 +217,7 @@ async def power_cycle(
         else:
             # ssh.run waits RUN_SLACK_S past the remote timeout: keep the whole probe inside the cap.
             probe_s = max(1.0, min(BOOT_ID_TIMEOUT_S, remaining - RUN_SLACK_S))
-            new_id = await _ssh_boot_id(ssh, board, probe_s)
+            new_id = await _ssh_boot_id(ssh, board, probe_s, allow)
             if by_registry:
                 reg = await _registry_boot_id(board, sites)
                 back = new_id is not None and reg is not None and reg != old_id

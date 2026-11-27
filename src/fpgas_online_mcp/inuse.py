@@ -14,13 +14,14 @@ import re
 import shlex
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from importlib import resources
 from typing import Literal
 
-from .boards import Board, BoardId, carries_tt, tt_board_with_serial, tt_host, tt_serials_on
+from .boards import Board, BoardId, carries_tt, not_offered, tt_board_with_serial, tt_host, tt_serials_on
 from .claims import Claim
+from .sites import SiteError
 from .ssh import defuse
 
 SCRIPT_TIMEOUT_S = 30.0
@@ -63,6 +64,9 @@ class Verdict:
     verdict: Literal["idle", "in use", "unknown"]
     signals: list[str] = field(default_factory=list)
     as_of: str = ""
+    # unknown because the site does not offer this welland Pi (its page is a 404) and allow_unoffered
+    # was off: overriding the verdict would not help, the claim could not reach the Pi anyway
+    not_offered: bool = False
 
 
 def remote_script() -> str:
@@ -190,17 +194,29 @@ def _combine(site: Verdict, ssh: Verdict) -> Verdict:
     """In use if either is, else unknown if either is, else idle; signals from both, the site's first."""
     verdicts = (site.verdict, ssh.verdict)
     verdict = "in use" if "in use" in verdicts else "unknown" if "unknown" in verdicts else "idle"
-    return _verdict(verdict, list(dict.fromkeys([*site.signals, *ssh.signals])))
+    v = _verdict(verdict, list(dict.fromkeys([*site.signals, *ssh.signals])))
+    return replace(v, not_offered=site.not_offered or ssh.not_offered)
 
 
 async def _check_ssh(
-    board: Board, ssh, claim: Claim | None, now: Callable[[], datetime], host: BoardId | None = None
+    board: Board,
+    ssh,
+    claim: Claim | None,
+    now: Callable[[], datetime],
+    host: BoardId | None = None,
+    allow_unoffered: bool = False,
 ) -> Verdict:
     """The script on the board's host: the board itself, or `host` (the Pi a Tiny Tapeout board is
-    plugged into; the claim is still compared against the Tiny Tapeout board)."""
+    plugged into; the claim is still compared against the Tiny Tapeout board). `allow_unoffered`
+    reaches a welland Pi the site does not offer (never used for a Tiny Tapeout board's Pi)."""
     command = "sh -c " + shlex.quote(remote_script())
     if host is None:
-        result = await ssh.run(board.id, command, SCRIPT_TIMEOUT_S)
+        try:
+            result = await ssh.run(board.id, command, SCRIPT_TIMEOUT_S, allow_unoffered=allow_unoffered)
+        except SiteError as e:
+            if e.status != 404 or board.site != "welland" or allow_unoffered:
+                raise
+            return replace(_verdict("unknown", [not_offered(board)]), not_offered=True)
     else:
         result = await ssh.run(host, command, SCRIPT_TIMEOUT_S, via=board.id)
     if result.timed_out:
@@ -338,12 +354,14 @@ async def _tt_rule_of_pi(board: Board, sites, clock, sleep, now) -> Verdict:
     return _verdict(v.verdict, [f"carries the Tiny Tapeout board {tt_board.id}", *v.signals])
 
 
-async def _check_pi_with_tt(board: Board, ssh, sites, claim: Claim | None, clock, sleep, now) -> Verdict:
+async def _check_pi_with_tt(
+    board: Board, ssh, sites, claim: Claim | None, clock, sleep, now, allow_unoffered: bool = False
+) -> Verdict:
     """A welland Pi that carries a Tiny Tapeout board: its ssh script and that board's site rule, so a
     web visitor on the Tiny Tapeout page blocks a claim on the Pi too."""
     site_verdict, ssh_verdict = await asyncio.gather(
         _safe(_tt_rule_of_pi(board, sites, clock, sleep, now)),
-        _safe(_check_ssh(board, ssh, claim, now)),
+        _safe(_check_ssh(board, ssh, claim, now, allow_unoffered=allow_unoffered)),
     )
     return _combine(site_verdict, ssh_verdict)
 
@@ -356,13 +374,17 @@ async def check(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], object] = asyncio.sleep,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    allow_unoffered: bool = False,
 ) -> Verdict:
-    """Live in-use check of one board. Never raises: any failure gives an `unknown` verdict."""
+    """Live in-use check of one board. Never raises: any failure gives an `unknown` verdict.
+
+    `allow_unoffered` lets the script reach a welland Pi the site does not offer (the caller decides
+    that the option applies); a Tiny Tapeout board ignores it (it reaches its Pi through `via`)."""
     try:
         if board.site == "tinytapeout":
             return await _check_tt_board(board, ssh, sites, claim, clock, sleep, now)
         if carries_tt(board):
-            return await _check_pi_with_tt(board, ssh, sites, claim, clock, sleep, now)
-        return await _check_ssh(board, ssh, claim, now)
+            return await _check_pi_with_tt(board, ssh, sites, claim, clock, sleep, now, allow_unoffered)
+        return await _check_ssh(board, ssh, claim, now, allow_unoffered=allow_unoffered)
     except Exception as exc:
         return _failed(exc)

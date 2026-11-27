@@ -85,14 +85,16 @@ class Ssh:
         self.clock, self.sites, self.answers, self.exits, self.runs = clock, sites, answers, 0, 0
         self.timeouts = []
         self.exited = []
+        self.allow = []  # allow_unoffered of each run
 
     async def exit(self, board):
         self.exits += 1
         self.exited.append(board)
         self.sites.order.append("exit")
 
-    async def run(self, board, command, timeout_s):
+    async def run(self, board, command, timeout_s, allow_unoffered=False):
         assert command == "cat /proc/sys/kernel/random/boot_id"
+        self.allow.append(allow_unoffered)
         self.runs += 1
         self.timeouts.append((self.clock.t, timeout_s))
         out = self.answers(self.clock.t, self.sites.toggled_at)
@@ -277,7 +279,7 @@ async def test_in_use_check_gets_claim_and_clock():
     sites = Sites(clock)
     seen = {}
 
-    async def check(b, ssh, s, claim, clock=None, sleep=None):
+    async def check(b, ssh, s, claim, clock=None, sleep=None, allow_unoffered=False):
         seen.update(claim=claim, clock=clock, sleep=sleep)
         return Verdict("idle", [], "x")
 
@@ -389,3 +391,19 @@ async def test_tt_board_on_another_pi_than_its_claim_is_not_cycled(held):
     assert not r.ok and "is now on welland:pi-sw2-p9" in r.message and f"holds {held or 'no Pi'}" in r.message
     assert "claim the board again" in r.message
     assert sites.calls == [] and ssh.exits == 0
+
+
+@pytest.mark.parametrize("allow", [True, False])
+async def test_the_claims_allow_unoffered_reaches_the_check_and_every_boot_id_read(allow):
+    clock = Clock()
+    sites = Sites(clock)
+    ssh = Ssh(clock, sites, reboot_after(20))
+    seen = {}
+
+    async def check(b, ssh, s, claim, clock=None, sleep=None, allow_unoffered=False):
+        seen["allow"] = allow_unoffered
+        return Verdict("idle", [], "x")
+
+    r = await run(board(), sites, ssh, clock, check, claim=replace(CLAIM, allow_unoffered=allow))
+    assert r.ok and seen["allow"] is allow
+    assert ssh.allow and set(ssh.allow) == {allow}

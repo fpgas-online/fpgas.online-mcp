@@ -32,9 +32,9 @@ class FakeSsh:
         self.result = RunResult(None if timed_out else status, text, False, timed_out)
         self.exc, self.calls = exc, []
 
-    async def run(self, b, command, timeout_s, via=None):
+    async def run(self, b, command, timeout_s, via=None, allow_unoffered=False):
         self.calls.append((b, command, timeout_s))
-        self.via = via
+        self.via, self.allow_unoffered = via, allow_unoffered
         if self.exc:
             raise self.exc
         return self.result
@@ -564,9 +564,9 @@ async def test_the_two_halves_of_a_tt_check_run_at_the_same_time():
     seen = {}
 
     class Ssh(FakeSsh):
-        async def run(self, b, command, timeout_s, via=None):
+        async def run(self, b, command, timeout_s, via=None, allow_unoffered=False):
             seen["site_reads"] = sites.reads  # 0: ssh went first, alone; 2: after the site half ended
-            return await super().run(b, command, timeout_s, via)
+            return await super().run(b, command, timeout_s, via, allow_unoffered)
 
     async def sleep(s):
         await asyncio.sleep(0)  # a real wait yields to the other half
@@ -576,3 +576,55 @@ async def test_the_two_halves_of_a_tt_check_run_at_the_same_time():
         board("tinytapeout", "fpga-2"), Ssh(script_out("idle")), sites, None, clock=ft, sleep=sleep, now=lambda: NOW
     )
     assert v.verdict == "idle" and seen["site_reads"] == 1
+
+
+# --- allow_unoffered: welland Pis the site does not offer ----------------------------------------
+
+UNOFFERED = Board(
+    BoardId("welland", "pi-sw2-p38"), "welland", "pi-sw2-p38", None, "attention", False, None, None, None, "x", False
+)
+NOT_LISTED = SiteError("welland: HTTP 404 for /fpgas/pi-sw2-p38.html", status=404)
+
+
+async def test_the_option_reaches_the_ssh_run():
+    ssh = FakeSsh(script_out("idle"))
+    v = await inuse.check(UNOFFERED, ssh, None, None, now=lambda: NOW, allow_unoffered=True)
+    assert v.verdict == "idle" and ssh.allow_unoffered is True and ssh.via is None
+    await inuse.check(UNOFFERED, ssh, None, None, now=lambda: NOW)
+    assert ssh.allow_unoffered is False  # off unless asked for
+
+
+async def test_an_unoffered_pi_without_the_option_says_how_to_reach_it():
+    v = await inuse.check(UNOFFERED, FakeSsh(exc=NOT_LISTED), None, None, now=lambda: NOW)
+    assert v.verdict == "unknown" and v.not_offered is True
+    assert v.signals == [
+        "welland does not offer welland:pi-sw2-p38 (condition attention); if the user wants it anyway and it is "
+        "up, pass allow_unoffered"
+    ]
+
+
+async def test_other_failures_are_not_called_not_offered():
+    for exc in (SiteError("welland: HTTP 500 for /fpgas/pi-sw2-p38.html", status=500), OSError("boom")):
+        v = await inuse.check(UNOFFERED, FakeSsh(exc=exc), None, None, now=lambda: NOW)
+        assert v.verdict == "unknown" and v.not_offered is False
+    v = await inuse.check(UNOFFERED, FakeSsh(exc=NOT_LISTED), None, None, now=lambda: NOW, allow_unoffered=True)
+    assert v.verdict == "unknown" and v.not_offered is False  # the option was on: a plain failure
+
+
+async def test_a_pi_with_a_tt_board_passes_the_option_and_the_not_offered_flag():
+    sites = PiSites({"tt-de641070db746f27": chip_status()})
+    ft = FakeTime()
+    ssh = FakeSsh(script_out("idle"))
+    v = await inuse.check(PI_TT, ssh, sites, None, clock=ft, sleep=ft.sleep, now=lambda: NOW, allow_unoffered=True)
+    assert v.verdict == "idle" and ssh.allow_unoffered is True
+    v = await inuse.check(PI_TT, FakeSsh(exc=SiteError("x", status=404)), sites, None, clock=ft, sleep=ft.sleep,
+                          now=lambda: NOW)  # fmt: skip
+    assert v.verdict == "unknown" and v.not_offered is True
+
+
+async def test_a_tt_board_never_uses_the_option_on_its_pi():
+    ft = FakeTime()
+    ssh = FakeSsh(script_out("idle"))
+    await inuse.check(board("tinytapeout", "fpga-2"), ssh, FakeSites(tt("loaded"), tt("loaded")), None, clock=ft,
+                      sleep=ft.sleep, now=lambda: NOW, allow_unoffered=True)  # fmt: skip
+    assert ssh.via == BoardId("tinytapeout", "fpga-2") and ssh.allow_unoffered is False
