@@ -13,6 +13,7 @@ from . import __version__
 from .client import BrokerClient, BrokerError, connect, ignored_option, version_tuple
 from .fleet import SECTIONS
 from .protocol import PROTOCOL
+from .ssh import clean_text
 
 __all__ = ["main", "run"]
 
@@ -221,7 +222,7 @@ def fmt_fleet(r: dict) -> str:
         lines.append(f"not available: {', '.join(r['unavailable'])}")
     if r.get("note"):
         lines.append(f"note: {r['note']}")
-    return "\n".join(lines)
+    return clean_text("\n".join(lines))  # a Pi's strings may carry terminal escapes
 
 
 def _cell(v: Any) -> str:
@@ -279,7 +280,7 @@ def fmt_switches(r: dict) -> str:
     lines.append(f"{len(rows)} of {r.get('total')} ports, from offset {r.get('offset')}; as of {r.get('as_of')}")
     if r.get("more"):
         lines.append(r["more"])
-    return "\n".join(lines)
+    return clean_text("\n".join(lines))  # a Pi's strings may carry terminal escapes
 
 
 # --- commands -------------------------------------------------------------------------------------

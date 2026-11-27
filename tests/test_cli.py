@@ -290,3 +290,21 @@ def test_fmt_switches_takes_any_cell_type_and_short_summaries():
     line = next(x for x in out.splitlines() if x.startswith("1 "))
     assert line.split()[:9] == ["1", "2", "pi-sw1-p2,-", "down", "1000", "-", "4.2", "2102", "7"]
     assert "2 known issues" in out and "known issue: poe #16 (https://x/16)" in out
+
+
+def test_fleet_and_switches_text_strip_control_characters():
+    """A Pi's strings (model, cameras, LLDP names) can carry terminal escapes: never print them."""
+    from fpgas_online_mcp import fleet
+    from fpgas_online_mcp.cli import fmt_fleet, fmt_switches
+
+    fix = Path(__file__).parent / "fixtures"
+    data = json.loads((fix / "welland_machine.json").read_text())
+    data["machine"]["registered_model"] = "\x1b[31mPi\x1b[0m 3\x07\r"
+    data["machine"]["cameras"] = ["\x1b]0;owned\x07ov5647"]
+    out = fmt_fleet(fleet.details(data, ["machine"], {}, head={"board": WELLAND}))
+    switches = json.loads((fix / "welland_switches_full.json").read_text())["switches"]
+    switches[0]["ports"][1]["lldp_name"] = "\x1b[2Jpi-sw1-p2\x00"
+    out += fmt_switches(fleet.switch_ports(switches, {}, switch=1, port=2))
+    for bad in ("\x1b", "\x07", "\x00", "\r"):
+        assert bad not in out
+    assert "Pi 3" in out and "ov5647" in out and "pi-sw1-p2" in out
