@@ -35,7 +35,18 @@ from fpgas_online_mcp.ssh import SshManager
 
 HERE = Path(__file__).parent
 REPO_TMP = TEST_TMP
-TOOLS = {"guide", "list_boards", "board_status", "claim_board", "release_board", "connect", "run", "power_cycle"}
+TOOLS = {
+    "guide",
+    "list_boards",
+    "board_status",
+    "claim_board",
+    "release_board",
+    "connect",
+    "run",
+    "power_cycle",
+    "fleet_details",
+    "switch_ports",
+}
 WELLAND = "welland:pi-sw1-p2"
 UNTRUSTED = '<board-output untrusted="true">'
 TT = "tinytapeout:fpga-2"
@@ -170,8 +181,8 @@ async def test_tool_list_and_annotations(stack):
     for t in tools.values():
         assert t.description and len(t.description) > 40
     a = {n: t.annotations for n, t in tools.items()}
-    for name in ("guide", "list_boards", "board_status"):
-        assert a[name].read_only_hint is True
+    for name in ("guide", "list_boards", "board_status", "fleet_details", "switch_ports"):
+        assert a[name].read_only_hint is True and a[name].idempotent_hint is True
     for name in ("claim_board", "release_board", "connect", "run", "power_cycle"):
         assert a[name].read_only_hint is False
     for name in ("claim_board", "release_board", "connect", "run"):
@@ -836,3 +847,127 @@ async def test_ssh_to_such_a_pi_without_a_listed_board_points_to_list_boards(sta
         text = err(await call(c, "connect", board=TT_PI))
         assert "this Pi is reached through its Tiny Tapeout board" in text and "list_boards" in text
         assert "site tinytapeout" in text
+
+
+# --- fleet_details and switch_ports --------------------------------------------------------------
+
+MACHINE_PATH = ("welland.fpgas.online", "/fleet/00000000cc479fd1/machine.json")
+ACTION_WORDS = ("_action", "can_power", "power_icon", "power_title", '"powers"', "admin_enabled")
+PS1_REFUSAL = "ps1 publishes no fleet or switch pages"
+
+
+def no_actions(text):
+    for word in ACTION_WORDS:
+        assert word not in text, word
+
+
+async def test_fleet_details_default_sections(stack):
+    async with stack.session() as c:
+        result = await call(c, "fleet_details", board=WELLAND)
+        details = ok(result, 8192)
+    no_actions(text_of(result, 8192))
+    assert details["board"] == WELLAND and "host" not in details
+    assert details["page"] == "https://welland.fpgas.online/fleet/00000000cc479fd1/"
+    assert {"machine", "boards", "network", "switch_port"} <= set(details)
+    assert "events" not in details and "console" not in details
+    assert details["machine"]["offered"] is True and details["switch_port"]["machines"] == ["pi-sw1-p2"]
+
+
+async def test_fleet_details_every_section_fits_8_kb(stack):
+    async with stack.session() as c:
+        result = await call(c, "fleet_details", board=WELLAND, sections=["all"])
+        details = ok(result, 8192)
+    no_actions(text_of(result, 8192))
+    assert details["cut"] and all("fleet_details" in note for note in details["cut"].values())
+    for name in ("events", "registrations"):
+        assert details[name].startswith(UNTRUSTED)
+    assert details["console"]["lines"].startswith(UNTRUSTED)
+
+
+async def test_fleet_details_paging(stack):
+    async with stack.session() as c:
+        first = ok(await call(c, "fleet_details", board=WELLAND, sections=["events"], limit=4), 8192)
+        assert first["paging"]["events"] == {"total": 30, "offset": 0, "shown": 4, "next": 4}
+        assert '\\"test-29\\"' not in first["events"]  # inside the wrapper the JSON is not escaped twice
+        assert '"test-29"' in first["events"] and first["events"].count("</board-output>") == 1
+        more = ok(await call(c, "fleet_details", board=WELLAND, sections=["events"], limit=4, offset=4), 8192)
+        assert more["paging"]["events"]["offset"] == 4 and '"test-25"' in more["events"]
+        assert "sections" in err(await call(c, "fleet_details", board=WELLAND, sections=["nonsense"]))
+
+
+async def test_fleet_details_falls_back_when_the_site_has_no_machine_json(stack):
+    stack.site.override[MACHINE_PATH] = httpx.Response(404, json={"error": "no host with this serial has registered"})
+    async with stack.session() as c:
+        result = await call(c, "fleet_details", board=WELLAND, sections=["all"])
+        details = ok(result, 8192)
+    no_actions(text_of(result, 8192))
+    assert "newer site" in details["note"] and details["page"] in details["note"]
+    assert details["machine"]["hostname"] == "pi-sw1-p2" and details["boards"][0]["type"] == "Fomu"
+    assert details["switch_port"]["switch"] == 1 and details["switch_port"]["port"] == 2
+    assert set(details["unavailable"]) == {"boot_checks", "labels", "registrations", "events", "console"}
+
+
+async def test_fleet_details_site_down_is_an_error(stack):
+    stack.site.override[MACHINE_PATH] = httpx.Response(500, text="oops")
+    async with stack.session() as c:
+        assert "try again" in err(await call(c, "fleet_details", board=WELLAND))
+
+
+async def test_fleet_details_of_a_tinytapeout_board_is_its_pi(stack):
+    async with stack.session() as c:
+        details = ok(await call(c, "fleet_details", board=TT_CHIP), 8192)
+        assert details["board"] == TT_CHIP and details["host"] == TT_PI
+        assert details["machine"]["hostname"] == "pi-sw2-p11" and details["serial"] == "00000000665fad00"
+        stack.site.override[("tinytapeout.fpgas.online", "/board/tt-ab2a48a7ee008dd9/")] = httpx.Response(
+            200, text=NO_PI
+        )
+        assert "not connected" in err(await call(c, "fleet_details", board=TT_CHIP))
+
+
+async def test_fleet_and_switches_refuse_ps1(stack):
+    async with stack.session() as c:
+        for result in (
+            await call(c, "fleet_details", board="ps1:pi3"),
+            await call(c, "fleet_details", board="ps1:pi99"),  # not offered now: still the same answer
+            await call(c, "switch_ports", site="ps1"),
+            await call(c, "switch_ports", board="ps1:pi3"),
+        ):
+            assert PS1_REFUSAL in err(result)
+
+
+async def test_switch_ports(stack):
+    async with stack.session() as c:
+        result = await call(c, "switch_ports")
+        every = ok(result, 8192)
+        no_actions(text_of(result, 8192))
+        assert every["total"] == 8 and [s["index"] for s in every["switches"]] == [1, 2]
+        problems = ok(await call(c, "switch_ports", problems=True), 8192)
+        assert {(r[0], r[1]) for r in problems["ports"]} == {(1, 11), (1, 14), (2, 2), (2, 42)}
+        one = ok(await call(c, "switch_ports", switch=1, port=2), 8192)
+        assert [(r[0], r[1], r[2]) for r in one["ports"]] == [(1, 2, ["pi-sw1-p2"])]
+        mine = ok(await call(c, "switch_ports", board=TT_CHIP), 8192)
+        assert mine["board"] == TT_CHIP and mine["host"] == TT_PI
+        assert [(r[0], r[1]) for r in mine["ports"]] == [(2, 11)]
+        page = ok(await call(c, "switch_ports", limit=3, offset=3), 8192)
+        assert len(page["ports"]) == 3 and page["next"] == 6
+        assert "no switch 9" in err(await call(c, "switch_ports", switch=9))
+        stack.site.override[("welland.fpgas.online", "/management/switches.json")] = httpx.Response(
+            503, json={"error": "the switches cannot be read now"}
+        )
+        stack.state.sites._cache._mem.clear()
+        for f in stack.state.sites._cache.dir.glob("*.entry"):
+            f.unlink()
+        assert "the switches cannot be read now" in err(await call(c, "switch_ports"))
+
+
+async def test_new_tools_against_an_older_broker_say_so(stack):
+    stack.broker._handlers.pop("fleet_details")
+    async with stack.session() as c:
+        text = err(await call(c, "fleet_details", board=WELLAND))
+    assert "older" in text and "fleet_details" in text
+
+
+async def test_list_boards_welland_note_points_at_fleet_details(stack):
+    async with stack.session() as c:
+        listed = ok(await call(c, "list_boards", site="welland"), 8192)
+    assert "fleet_details" in listed["sites"]["welland"]["note"]
