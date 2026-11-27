@@ -11,7 +11,7 @@ import json
 import httpx
 import pytest
 from test_broker import env  # noqa: F401  (fixture)
-from test_mcp import HERE, stack  # noqa: F401  (fixture)
+from test_mcp import HERE, call, ok, stack  # noqa: F401  (fixture)
 
 from fpgas_online_mcp import client, paths
 from fpgas_online_mcp.client import BrokerError
@@ -206,3 +206,76 @@ async def test_the_option_must_be_a_boolean(stack, value):  # noqa: F811
     async with broker() as c:
         e = await refused(c, "claim_board", board=UNOFFERED, purpose="x", allow_unoffered=value)
         assert e.code == "bad_request" and "allow_unoffered" in e.message
+
+
+# --- board_status: boot check, boards, fleet page and switch port (welland, read-only) ------------
+
+
+async def test_board_status_shows_the_boot_check_boards_fleet_page_and_switch_port(stack):  # noqa: F811
+    async with broker() as c:
+        board = (await c.call("board_status", board=UNOFFERED, check_use=False))["board"]
+    assert board["boot_check"] == {"result": "fail", "at": "2026-10-17T04:14:29Z"}
+    assert board["boards"] == [
+        {
+            "type": "NeTV2",
+            "result": "fail",
+            "tests": {"jtag": "pass", "uart": "pass", "ddr": "pass", "flash": "pass", "wiring": "pass"},
+        }
+    ]
+    assert board["fleet_page"] == "https://welland.fpgas.online/fleet/000000004fe3e7e4/"
+    assert board["switch_port"] == {"link_up": True, "poe_state": "delivering", "watts": 8.7}
+    assert all(r.method == "GET" for r in stack.site.requests)  # nothing but reads, never a switch action
+    assert stack.site.count("/management/switches.json") == 1
+
+
+async def test_board_status_without_switch_facts_or_on_other_sites(stack):  # noqa: F811
+    stack.site.override[("welland.fpgas.online", "/management/switches.json")] = httpx.Response(500)
+    async with broker() as c:
+        board = (await c.call("board_status", board=UNOFFERED, check_use=False))["board"]
+        assert "switch_port" not in board and board["boot_check"]["result"] == "fail"  # the rest is still there
+        for other in ("ps1:pi3", "tinytapeout:tt06"):
+            board = (await c.call("board_status", board=other, check_use=False))["board"]
+            assert not {"switch_port", "boot_check", "boards", "fleet_page"} & set(board)
+
+
+def huge_registry(stack, boards=8, tests=40):  # noqa: F811
+    registry = json.loads((HERE / "fixtures" / "welland_registry.json").read_text())
+    for m in registry["machines"]:
+        if m["hostname"] == "pi-sw1-p10":
+            m["boards"] = [
+                {"type": f"Board type {i}", "result": "fail", "tests": {f"test-{j:02d}": "pass" for j in range(tests)}}
+                for i in range(boards)
+            ]
+    stack.site.override[("welland.fpgas.online", "/fleet/registry.json")] = httpx.Response(200, json=registry)
+
+
+def long_verdict():
+    return Verdict("in use", [f"board says: active: signal {i} " + "x" * 180 for i in range(10)], "x")
+
+
+async def test_board_status_cuts_the_tests_first_and_never_the_verdict(stack):  # noqa: F811
+    huge_registry(stack, boards=4, tests=25)
+    stack.inuse.verdict = long_verdict()
+    async with stack.session() as c:
+        status = ok(await call(c, "board_status", board=UNOFFERED))  # asserts it fits in 4 KB
+    assert status["in_use"]["verdict"] == "in use"
+    assert all(f"signal {i} " in status["in_use"]["signals"][0] for i in range(10))
+    assert [b["type"] for b in status["board"]["boards"]] == [f"Board type {i}" for i in range(4)]
+    assert all("tests" not in b for b in status["board"]["boards"])
+    assert "fleet_page" in status["board"]["cut"] and status["board"]["boot_check"]["result"] == "fail"
+
+
+async def test_board_status_drops_the_boards_when_even_that_is_too_long(stack):  # noqa: F811
+    huge_registry(stack, boards=60, tests=3)
+    stack.inuse.verdict = long_verdict()
+    async with stack.session() as c:
+        status = ok(await call(c, "board_status", board=UNOFFERED))
+    assert "boards" not in status["board"] and "fleet_page" in status["board"]["cut"]
+    assert status["in_use"]["verdict"] == "in use" and status["board"]["switch_port"]["watts"] == 8.7
+
+
+async def test_board_status_that_fits_keeps_every_test(stack):  # noqa: F811
+    huge_registry(stack, boards=2, tests=5)
+    async with stack.session() as c:
+        status = ok(await call(c, "board_status", board=UNOFFERED))
+    assert all(len(b["tests"]) == 5 for b in status["board"]["boards"]) and "cut" not in status["board"]

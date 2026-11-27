@@ -32,11 +32,14 @@ from .boards import (
     inventory,
     not_offered,
     offered_note,
+    port_facts,
+    registry_facts,
     switch_port,
     tt_board_with_serial,
     tt_host,
     tt_serials_on,
     unoffered_refusal,
+    welland_entry,
 )
 from .broker import Broker, Conn
 from .claims import Claim, ClaimConflict, ClaimGone, ClaimStore
@@ -397,6 +400,7 @@ async def op_board_status(state: State, args: dict, conn: Conn) -> dict:
     host = await _host_or_none(state, board)
     if host is not None:
         result["board"]["host"] = str(host)
+    result["board"].update(await _welland_facts(state, board))
     if allow:
         result["allow_unoffered"] = True  # also tells a newer front end that this broker knows the option
     _offered_note(result, board, allow)
@@ -405,6 +409,37 @@ async def op_board_status(state: State, args: dict, conn: Conn) -> dict:
         result["in_use"] = _verdict_view(verdict)
         if verdict.not_offered:
             result["not_offered"] = not_offered(board)
+    return _fit_status(result)
+
+
+async def _welland_facts(state: State, board: Board) -> dict:
+    """A welland Pi's boot check, boards, fleet page (registry, cached) and switch port (read-only)."""
+    if board.site != "welland":
+        return {}
+    try:
+        entry = await welland_entry(state.sites, board.name)
+    except SiteError:
+        entry = None
+    facts = registry_facts(entry) if entry else {}
+    if "boot_check" in facts:
+        facts["boot_check"]["at"] = _short(facts["boot_check"]["at"])
+    port = await port_facts(state.sites, board.name)
+    if port is not None:
+        facts["switch_port"] = port
+    return facts
+
+
+def _fit_status(result: dict) -> dict:
+    """Keep board_status within LIMIT: cut the boards' tests first, then the boards; never the verdict."""
+    board = result["board"]
+    if _size(result) <= LIMIT or not board.get("boards"):
+        return result
+    see = "; see fleet_page" if "fleet_page" in board else ""
+    board["boards"] = [{k: v for k, v in b.items() if k != "tests"} for b in board["boards"]]
+    board["cut"] = f"the boards' tests were cut at the size limit{see}"
+    if _size(result) > LIMIT:
+        del board["boards"]
+        board["cut"] = f"the boards and their tests were cut at the size limit{see}"
     return result
 
 
