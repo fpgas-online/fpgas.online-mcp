@@ -718,7 +718,7 @@ async def op_connect(state: State, args: dict, conn: Conn) -> dict:
         "include": f"to use plain `ssh {info.alias}`, the user can add this line at the top of ~/.ssh/config "
         f"(before any Host block, or ssh applies it only inside that block): {info.include_line}",
         "rules": "non-interactive commands only: never ssh -t, never kill or exit the shared tmux. A job that "
-        "outlives one command goes in a new named window of the shared `default` tmux session, and you keep "
+        "outlives one command goes in a new named window of tmux session `default`, and you keep "
         "your claim until it ends (guide ssh). The shared "
         "connection closes after 30 minutes unused (and on power_cycle): if the ssh line asks for a password or "
         "fails, call connect again",

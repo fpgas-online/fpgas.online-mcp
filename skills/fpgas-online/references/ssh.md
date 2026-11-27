@@ -13,10 +13,11 @@ Pick a host from the offered list first (boards.md) and check it is not in use (
 
 ## Long-running jobs
 
-A job that must outlive one `ssh host cmd` goes in a **new named window of the shared tmux
-session `default`**, never in a session of its own (an interactive login reaps those), under
-`nohup` or after `&` (invisible to people and to the in-use check). The second command makes
-`default` if it does not exist:
+A job that must outlive one `ssh host cmd` goes in a **new named window of the tmux session
+`default`**, never under `nohup` or after `&`: the in-use check lists tmux windows and cannot see
+those. welland logins are plain bash for now (fpgas.online-infra#310), so others see the window
+only with `tmux attach -t default`; on ps1 every login shares `default` and reaps other sessions.
+The second command makes `default` if it does not exist:
 
 ```sh
 J='"sh ~/capture.sh; echo exit \$?; read x"'   # the window keeps its output and exit status
