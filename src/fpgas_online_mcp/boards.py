@@ -16,6 +16,14 @@ NOTES = {
 # Every Tiny Tapeout board is plugged into a Pi of this site; the board page names which one.
 TT_HOST_SITE = "welland"
 
+# A welland Pi is up and running in these registry conditions (operational: offered; attention: up
+# but not offered, its boot check failed or found no board). `missing` stopped checking in.
+UP = ("operational", "attention")
+OFFERED_NOTE = (
+    "not offered by the site (condition: {condition}): it may be under maintenance; use it only for what the user asked"
+)
+FLEET_PAGE = "https://welland.fpgas.online/fleet/{serial}/"
+
 _WELLAND_NAME = re.compile(r"pi-sw([0-9]+)-p([0-9]+)")
 _PS1_NAME = re.compile(r"pi([0-9]+)")
 _POSITIVE = re.compile(r"[1-9][0-9]*")
@@ -132,6 +140,7 @@ class Board:
     usb_serial: str | None
     as_of: str
     stale: bool
+    setup_port: bool = False  # welland: on the setup port, being set up
 
     def to_dict(self) -> dict:
         return {
@@ -146,6 +155,7 @@ class Board:
             "usb_serial": self.usb_serial,
             "as_of": self.as_of,
             "stale": self.stale,
+            "setup_port": self.setup_port,
         }
 
 
@@ -200,6 +210,7 @@ async def _welland(sites: SiteClient) -> list[Board]:
                 offered=m.get("offered"),
                 last_seen=m.get("last_seen"),
                 boot_id=boot_id,
+                setup_port=m.get("setup_port") is True,
             )
         )
     return boards
@@ -264,6 +275,97 @@ async def tt_board_with_serial(sites: SiteClient, serials: list[str | None], liv
     if found is None and any(b.condition == "unknown" for b in boards):
         raise SiteError("tinytapeout: could not read every board's status.json, so cannot tell which is on this Pi")
     return found
+
+
+# --- Pis the site does not offer -------------------------------------------------------------------
+
+
+def _why_not_unoffered(board: Board) -> str | None:
+    """Why allow_unoffered cannot reach this board (short), or None when it can."""
+    if board.site == "ps1":
+        return "ps1 lists only the hosts it offers, so it cannot tell that another host is up"
+    if board.site != "welland":
+        return "a Tiny Tapeout board already reaches its Pi without it"
+    if board.condition == "missing":
+        return "not checking in"
+    if board.condition not in UP:
+        return f"condition {board.condition}"
+    if board.setup_port:
+        return "on the setup port"
+    return None
+
+
+def unoffered_refusal(board: Board) -> str | None:
+    """Why `allow_unoffered` does not cover `board`, or None when it does: a welland Pi that is up and
+    running (condition operational or attention) and not on the setup port (a Pi there is being set up)."""
+    why = _why_not_unoffered(board)
+    if why is None:
+        return None
+    if board.site != "welland":
+        return f"allow_unoffered covers only welland Pis: {why}"
+    if board.setup_port:
+        return f"{board.id} is on the setup port (it is being set up): allow_unoffered does not cover it"
+    if board.condition == "missing":
+        state = "missing (not checking in)"
+    else:
+        state = f"in condition {board.condition}"
+    return f"{board.id} is {state}: allow_unoffered reaches only a Pi that is up (condition operational or attention)"
+
+
+def not_offered(board: Board) -> str:
+    """What to say when the page of a welland Pi is a 404 (the site does not offer it) and the option is off."""
+    head = f"welland does not offer {board.id} (condition {board.condition}); "
+    why = _why_not_unoffered(board)
+    if why is None:
+        return head + "if the user wants it anyway and it is up, pass allow_unoffered"
+    if board.setup_port:
+        why = "it is on the setup port (being set up)"
+    elif board.condition == "missing":
+        why = "it is not checking in"
+    else:
+        why = "only a Pi that is up (condition operational or attention) can be reached"
+    return head + f"allow_unoffered will not help: {why}"
+
+
+def offered_note(board: Board) -> str:
+    """The note on results for a Pi reached with allow_unoffered that the site does not offer."""
+    return OFFERED_NOTE.format(condition=board.condition)
+
+
+async def welland_entry(sites: SiteClient, name: str) -> dict | None:
+    """The (cached) registry entry of welland Pi `name`, the one the inventory shows; None if not listed."""
+    machines, _ = await sites.welland_registry()
+    return _chosen(machines).get(name)
+
+
+async def port_facts(sites: SiteClient, name: str) -> dict | None:
+    """Read-only facts of the switch port a welland Pi's name gives: {"link_up", "poe_state", "watts"}
+    (a value the page does not give plainly is None). None when the page cannot be read or does not
+    show that port. Nothing here ever acts on a switch."""
+    sp = switch_port("welland", name)
+    if sp is None:
+        return None
+    port, switch = sp
+    try:
+        switches, _ = await sites.welland_switches()
+    except SiteError:
+        return None
+    for s in switches:
+        if s.get("index") != switch:
+            continue
+        for p in s.get("ports") or []:
+            if isinstance(p, dict) and p.get("port") == port:
+                link, poe, watts = p.get("link_up"), p.get("poe_state"), p.get("watts")
+                try:
+                    watts = float(watts) if isinstance(watts, str | int | float) and watts != "" else None
+                except ValueError:
+                    watts = None
+                return {
+                    "link_up": link if isinstance(link, bool) else None,
+                    "poe_state": poe if isinstance(poe, str) and poe else None,
+                    "watts": None if isinstance(watts, bool) else watts,
+                }
+    return None
 
 
 _LOADERS = {"welland": _welland, "ps1": _ps1, "tinytapeout": _tinytapeout}
